@@ -32,6 +32,9 @@ if errorlevel 1 (
   exit /b 1
 )
 
-echo [4/4] Майстер налаштування...
+echo [4/4] Ярлик панелі керування на робочому столі...
+call panel_shortcut.bat quiet
+echo.
+echo Майстер налаштування...
 .venv\Scripts\python.exe bot.py --setup
 pause

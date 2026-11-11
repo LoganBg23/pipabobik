@@ -14,6 +14,7 @@ obs = obslua
 
 local bot_dir = ""
 local mode = "obs"
+local open_panel = true
 local launched = false
 local is_windows = package.config:sub(1, 1) == "\\"
 
@@ -65,6 +66,21 @@ local function launch(live)
 	obs.script_log(obs.LOG_INFO, "pipabobik: бот запущено (" .. args .. ")")
 end
 
+local function launch_panel()
+	if bot_dir == "" then return end
+	local cmd
+	if is_windows then
+		local pyw = path(bot_dir, ".venv", "Scripts", "pythonw.exe")
+		if not file_exists(pyw) then return end
+		cmd = string.format('start "" /D "%s" "%s" panel.pyw', bot_dir, pyw)
+	else
+		local py = path(bot_dir, ".venv", "bin", "python")
+		cmd = string.format('cd "%s" && nohup "%s" panel.pyw >/dev/null 2>&1 &', bot_dir, py)
+	end
+	os.execute(cmd)
+	obs.script_log(obs.LOG_INFO, "pipabobik: відкриваю панель керування")
+end
+
 local function on_event(event)
 	if event == obs.OBS_FRONTEND_EVENT_STREAMING_STARTED then
 		write_state("live")
@@ -92,6 +108,11 @@ function script_properties()
 		obs.OBS_COMBO_TYPE_LIST, obs.OBS_COMBO_FORMAT_STRING)
 	obs.obs_property_list_add_string(list, "Разом з OBS (музика — з початком трансляції)", "obs")
 	obs.obs_property_list_add_string(list, "Разом з трансляцією", "stream")
+	obs.obs_properties_add_bool(p, "open_panel", "Відкривати панель керування разом з OBS")
+	obs.obs_properties_add_button(p, "panel_now", "Відкрити панель керування", function()
+		launch_panel()
+		return false
+	end)
 	obs.obs_properties_add_button(p, "launch_now", "Запустити бота зараз", function()
 		launch(obs.obs_frontend_streaming_active())
 		return false
@@ -107,12 +128,14 @@ end
 
 function script_defaults(settings)
 	obs.obs_data_set_default_string(settings, "mode", "obs")
+	obs.obs_data_set_default_bool(settings, "open_panel", true)
 end
 
 function script_update(settings)
 	bot_dir = obs.obs_data_get_string(settings, "bot_dir")
 	if is_windows then bot_dir = bot_dir:gsub("/", "\\") end
 	mode = obs.obs_data_get_string(settings, "mode")
+	open_panel = obs.obs_data_get_bool(settings, "open_panel")
 end
 
 function script_load(settings)
@@ -125,6 +148,8 @@ function script_load(settings)
 		write_state("idle")
 		if mode == "obs" then launch(false) end
 	end
+	-- панель сама дочекається бота (або запустить його в режимі OBS)
+	if open_panel then launch_panel() end
 end
 
 function script_unload()

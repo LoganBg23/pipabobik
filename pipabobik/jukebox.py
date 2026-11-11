@@ -30,6 +30,7 @@ class Jukebox:
         self.active = False
         self.history: deque[Track] = deque(maxlen=20)
         self.banned_ids: set[str] = set()
+        self.banned_meta: dict[str, str] = {}
         self.last_request: dict[str, float] = {}
         self._fallback: list[Track] = []
         self._fallback_loaded_at = 0.0
@@ -57,7 +58,12 @@ class Jukebox:
                 if self.queue:
                     log.info("Відновлено чергу: %d треків", len(self.queue))
             if self._ban_file.exists():
-                self.banned_ids = set(json.loads(self._ban_file.read_text(encoding="utf-8")))
+                data = json.loads(self._ban_file.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    self.banned_meta = data
+                else:  # старий формат — просто список id
+                    self.banned_meta = {vid: vid for vid in data}
+                self.banned_ids = set(self.banned_meta)
         except (OSError, ValueError, TypeError) as e:
             log.warning("Не вдалося відновити дані: %s", e)
 
@@ -67,7 +73,8 @@ class Jukebox:
         if self.now and self.now.source == "request" and self.now not in items:
             items.insert(0, self.now)  # якщо бот закривають посеред треку — не губимо його
         self._queue_file.write_text(json.dumps([t.to_dict() for t in items], ensure_ascii=False), encoding="utf-8")
-        self._ban_file.write_text(json.dumps(sorted(self.banned_ids)), encoding="utf-8")
+        meta = {vid: self.banned_meta.get(vid, vid) for vid in sorted(self.banned_ids)}
+        self._ban_file.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
 
     def changed(self) -> None:
         for cb in list(self.listeners):
@@ -110,12 +117,16 @@ class Jukebox:
             return f"зачекай ще {int(left) + 1} с перед наступним замовленням ⏳"
         return None
 
-    def add(self, track: Track, user_id: str, login: str) -> int:
+    def add(self, track: Track, user_id: str, login: str, front: bool = False) -> int:
         track.requested_by, track.requested_by_id, track.source = login, user_id, "request"
         track.added_at = time.time()
-        self.queue.append(track)
+        if front:
+            self.queue.insert(0, track)
+            pos = 1
+        else:
+            self.queue.append(track)
+            pos = len(self.queue)
         self.last_request[user_id] = time.time()
-        pos = len(self.queue)
         # замовлення перебиває фонову музику
         if self.now and self.now.source == "fallback" and self.rules.get("interrupt_fallback", True):
             asyncio.create_task(self.skip())
@@ -152,10 +163,28 @@ class Jukebox:
         return None
 
     def move_up(self, index: int) -> None:
-        if 0 < index < len(self.queue):
-            self.queue[index - 1], self.queue[index] = self.queue[index], self.queue[index - 1]
+        self.move(index, index - 1)
+
+    def move(self, index: int, to: int) -> None:
+        if 0 <= index < len(self.queue) and 0 <= to < len(self.queue) and index != to:
+            self.queue.insert(to, self.queue.pop(index))
             self.save()
             self.changed()
+
+    def clear(self) -> None:
+        self.queue.clear()
+        self.save()
+        self.changed()
+
+    def unban(self, video_id: str) -> None:
+        self.banned_ids.discard(video_id)
+        self.banned_meta.pop(video_id, None)
+        self.save()
+        self.changed()
+
+    def reset_fallback(self) -> None:
+        self._fallback = []
+        self._fallback_loaded_at = 0.0
 
     # ── керування ──
     async def skip(self) -> Track | None:
@@ -168,6 +197,7 @@ class Jukebox:
         cur = self.now
         if cur:
             self.banned_ids.add(cur.video_id)
+            self.banned_meta[cur.video_id] = cur.label
             self.save()
             await self.skip()
         return cur
@@ -225,6 +255,8 @@ class Jukebox:
             "queue_len": len(self.queue),
             "volume": self.player.volume,
             "active": self.active,
+            "history": [t.to_dict() for t in list(self.history)[-8:][::-1]],
+            "banned": [{"video_id": k, "label": v} for k, v in self.banned_meta.items() if k in self.banned_ids],
         }
 
     # ── фоновий плейлист ──

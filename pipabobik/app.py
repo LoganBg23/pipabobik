@@ -40,10 +40,13 @@ def setup_logging(verbose: bool = False) -> None:
 
 
 class Bot:
-    def __init__(self, cfg: Config, obs_mode: bool = False, live: bool = False):
+    def __init__(self, cfg: Config, obs_mode: bool = False, live: bool = False, paused: bool = False):
         self.cfg = cfg
         self.obs_mode = obs_mode
         self.start_live = live
+        self.start_paused = paused
+        self.obs_live: bool | None = None  # None — бот запущено не з OBS
+        self.google_login: bool | None = None
         self.session: aiohttp.ClientSession | None = None
         self.shutdown = asyncio.Event()
 
@@ -61,6 +64,39 @@ class Bot:
         self.server = Server(self, cfg.port, DATA_DIR)
         self.chat: TwitchChat | None = None
         self._greeted = 0.0
+
+    def health(self) -> dict:
+        return {
+            "twitch": self.auth.login if self.auth.authorized.is_set() else None,
+            "channel": self.cfg.channel,
+            "chat": bool(self.chat and self.chat.connected.is_set()),
+            "mpv": self.player.available,
+            "google": self.google_login,
+            "obs_live": self.obs_live,
+        }
+
+    def apply_settings(self, updates: dict) -> None:
+        """Застосовує зміни з панелі, які не підхоплюються самі."""
+        if "chat" in updates:
+            self.jukebox.announce = bool(self.cfg["chat"].get("announce_tracks"))
+        if "player" in updates and "normalize" in updates["player"]:
+            self.player.normalize = bool(updates["player"]["normalize"])  # з наступного треку
+        if "google" in updates:
+            self.jukebox.reset_fallback()
+        log.info("Налаштування оновлено з панелі: %s", ", ".join(f"{s}.{k}" for s, kv in updates.items() for k in kv))
+        self.jukebox.changed()
+
+    def _detect_google_login(self) -> bool | None:
+        g = self.cfg["google"]
+        if not (g.get("cookies_from_browser") or g.get("cookies_file")):
+            return None
+        try:
+            import yt_dlp
+
+            with yt_dlp.YoutubeDL(self.music.ydl_opts()) as ydl:
+                return any(c.name in ("SAPISID", "__Secure-3PAPISID") for c in ydl.cookiejar if "youtube.com" in c.domain)
+        except Exception:  # noqa: BLE001
+            return False
 
     async def say(self, text: str, reply_to: str | None = None) -> None:
         if self.chat:
@@ -97,8 +133,9 @@ class Bot:
         ]
         if self.obs_mode:
             tasks.append(asyncio.create_task(self._watch_obs(), name="obs"))
-        if not self.obs_mode or self.start_live:
+        if self.start_live or not (self.obs_mode or self.start_paused):
             self.jukebox.activate()
+        asyncio.create_task(self._check_google())
         try:
             await self.shutdown.wait()
         finally:
@@ -111,6 +148,10 @@ class Bot:
             await self.server.stop()
             await self.session.close()
         return 0
+
+    async def _check_google(self) -> None:
+        self.google_login = await asyncio.to_thread(self._detect_google_login)
+        self.jukebox.changed()
 
     async def _validate_loop(self) -> None:
         """Twitch вимагає перевіряти токен щогодини."""
@@ -140,6 +181,8 @@ class Bot:
             except (OSError, IndexError):
                 state = ""
             if state != last:
+                self.obs_live = state == "live"
+                self.jukebox.changed()
                 if state == "live":
                     log.info("OBS: трансляцію розпочато")
                     self.jukebox.activate()
@@ -154,7 +197,7 @@ class Bot:
                     self.shutdown.set()
                     return
                 last = state
-            if tick % 10 == 0:
+            if tick % 15 == 0:
                 if await asyncio.to_thread(self._obs_running):
                     missing = 0
                 else:

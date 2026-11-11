@@ -25,6 +25,12 @@ class Server:
         r.add_get("/", self.index)
         r.add_get("/widget", self.page("widget.html"))
         r.add_get("/panel", self.page("panel.html"))
+        r.add_get("/app", self.page("app.html"))
+        r.add_get("/favicon.ico", self.favicon)
+        r.add_post("/api/search", self.api_search)
+        r.add_post("/api/add", self.api_add)
+        r.add_get("/api/settings", self.api_settings_get)
+        r.add_post("/api/settings", self.api_settings_set)
         r.add_get("/api/state", self.api_state)
         r.add_get("/api/events", self.api_events)
         r.add_post("/api/control", self.api_control)
@@ -54,14 +60,21 @@ class Server:
             await self.runner.cleanup()
 
     # ── стан ──
+    def payload(self) -> dict:
+        st = self.bot.jukebox.state()
+        st["health"] = self.bot.health()
+        return st
+
     def push(self) -> None:
-        data = json.dumps(self.bot.jukebox.state(), ensure_ascii=False)
+        if not self._clients:
+            return
+        data = json.dumps(self.payload(), ensure_ascii=False)
         for q in list(self._clients):
             if q.qsize() < 20:
                 q.put_nowait(data)
 
     async def api_state(self, request: web.Request) -> web.Response:
-        return web.json_response(self.bot.jukebox.state(), headers={"Access-Control-Allow-Origin": "*"})
+        return web.json_response(self.payload(), headers={"Access-Control-Allow-Origin": "*"})
 
     async def api_events(self, request: web.Request) -> web.StreamResponse:
         resp = web.StreamResponse(
@@ -75,7 +88,7 @@ class Server:
         q: asyncio.Queue = asyncio.Queue()
         self._clients.add(q)
         try:
-            await resp.write(f"data: {json.dumps(self.bot.jukebox.state(), ensure_ascii=False)}\n\n".encode())
+            await resp.write(f"data: {json.dumps(self.payload(), ensure_ascii=False)}\n\n".encode())
             while True:
                 try:
                     data = await asyncio.wait_for(q.get(), timeout=15)
@@ -119,8 +132,14 @@ class Server:
         return web.Response(text=html, content_type="text/html")
 
     # ── керування з панелі ──
+    def _authorized(self, request: web.Request) -> bool:
+        return request.headers.get("X-Pipabobik-Key") == self.key
+
+    async def favicon(self, request: web.Request) -> web.Response:
+        return web.FileResponse(WEB_DIR / "static" / "pipabobik.ico")
+
     async def api_control(self, request: web.Request) -> web.Response:
-        if request.headers.get("X-Pipabobik-Key") != self.key:
+        if not self._authorized(request):
             return web.json_response({"error": "bad key"}, status=403)
         d = await request.json()
         jb = self.bot.jukebox
@@ -135,6 +154,14 @@ class Server:
             jb.remove_at(int(d.get("index", -1)))
         elif action == "up":
             jb.move_up(int(d.get("index", -1)))
+        elif action == "move":
+            jb.move(int(d.get("index", -1)), int(d.get("to", -1)))
+        elif action == "next":  # поставити трек із черги першим
+            jb.move(int(d.get("index", -1)), 0)
+        elif action == "clear":
+            jb.clear()
+        elif action == "unban":
+            jb.unban(str(d.get("video_id", "")))
         elif action == "ban":
             await jb.ban_current()
         elif action == "on":
@@ -146,7 +173,99 @@ class Server:
             return web.json_response({"ok": True})
         else:
             return web.json_response({"error": "unknown action"}, status=400)
-        return web.json_response(jb.state())
+        return web.json_response(self.payload())
+
+    # ── пошук і додавання з панелі ──
+    async def api_search(self, request: web.Request) -> web.Response:
+        if not self._authorized(request):
+            return web.json_response({"error": "bad key"}, status=403)
+        q = str((await request.json()).get("q", "")).strip()[:200]
+        if not q:
+            return web.json_response({"results": []})
+        from .music import extract_video_id
+
+        vid = extract_video_id(q)
+        if vid:
+            t = await self.bot.music.by_id(vid)
+            results = [t] if t else []
+        else:
+            results = await self.bot.music.search(q, only_songs=bool(self.bot.cfg["rules"].get("only_songs", True)))
+        return web.json_response({"results": [t.to_dict() for t in results[:8]]})
+
+    async def api_add(self, request: web.Request) -> web.Response:
+        if not self._authorized(request):
+            return web.json_response({"error": "bad key"}, status=403)
+        from .music import Track
+
+        d = await request.json()
+        try:
+            track = Track.from_dict(d.get("track") or {})
+        except TypeError:
+            return web.json_response({"error": "bad track"}, status=400)
+        jb = self.bot.jukebox
+        if track.video_id in jb.banned_ids:
+            jb.unban(track.video_id)  # стрімер сам обрав — знімаємо бан
+        mode = d.get("mode", "end")  # end | next | now
+        who = self.bot.auth.login or self.bot.cfg.channel or "стрімер"
+        jb.add(track, "panel", who, front=mode in ("next", "now"))
+        if mode == "now":
+            if not jb.active:
+                jb.activate()
+            elif jb.now:
+                await jb.skip()
+        return web.json_response(self.payload())
+
+    # ── налаштування ──
+    SETTINGS_SCHEMA = {
+        "rules": {
+            "who_can_request": str, "max_duration": int, "max_per_user": int, "cooldown": int,
+            "max_queue": int, "only_songs": bool, "block_explicit": bool, "interrupt_fallback": bool,
+            "banned_words": list,
+        },
+        "chat": {"announce_tracks": bool, "greet_on_stream_start": bool},
+        "player": {"normalize": bool},
+        "google": {"fallback_playlist": str, "fallback_shuffle": bool},
+    }
+
+    async def api_settings_get(self, request: web.Request) -> web.Response:
+        if not self._authorized(request):
+            return web.json_response({"error": "bad key"}, status=403)
+        cfg = self.bot.cfg
+        out = {sec: {k: cfg[sec].get(k) for k in keys} for sec, keys in self.SETTINGS_SCHEMA.items()}
+        return web.json_response(out)
+
+    async def api_settings_set(self, request: web.Request) -> web.Response:
+        if not self._authorized(request):
+            return web.json_response({"error": "bad key"}, status=403)
+        from .config import set_values
+
+        d = await request.json()
+        cfg = self.bot.cfg
+        updates: dict[str, dict] = {}
+        for sec, keys in self.SETTINGS_SCHEMA.items():
+            for k, typ in keys.items():
+                if k not in (d.get(sec) or {}):
+                    continue
+                v = d[sec][k]
+                try:
+                    if typ is bool:
+                        v = bool(v)
+                    elif typ is int:
+                        v = max(0, int(v))
+                    elif typ is list:
+                        v = [str(x).strip().lower() for x in (v if isinstance(v, list) else str(v).split(",")) if str(x).strip()]
+                    else:
+                        v = str(v).strip()
+                except (TypeError, ValueError):
+                    return web.json_response({"error": f"{sec}.{k}: невірне значення"}, status=400)
+                if k == "who_can_request" and v not in ("all", "subs", "vip", "mods"):
+                    continue
+                cfg[sec][k] = v  # застосовується одразу — ті самі словники використовують черга й команди
+                updates.setdefault(sec, {})[k] = v
+        if updates:
+            set_values(cfg.path, updates)
+            self.bot.apply_settings(updates)
+        return web.json_response({"ok": True})
 
     # ── авторизація Twitch ──
     async def auth_start(self, request: web.Request) -> web.Response:

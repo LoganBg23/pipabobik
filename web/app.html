@@ -1,0 +1,504 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<title>pipabobik</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/favicon.ico">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@600;800&family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --night: #1c0716;     /* основа — нічна слива */
+    --surface: #2a0d22;   /* картки */
+    --raised: #3b1531;    /* кнопки, поля */
+    --line: #4e1f42;
+    --hot: #ff3d9a;       /* головний акцент */
+    --blush: #ffb3d6;
+    --pearl: #fdeaf4;     /* текст */
+    --muted: #c592b2;
+    --ok: #8ff0c8;
+    --warn: #ffcf70;
+    --r-lg: 22px; --r-md: 14px; --r-sm: 10px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { color-scheme: dark; }
+  body {
+    font: 500 14px/1.45 "Manrope", system-ui, sans-serif;
+    color: var(--pearl);
+    background:
+      radial-gradient(600px 380px at 85% -10%, rgba(255, 61, 154, .22), transparent 70%),
+      radial-gradient(500px 300px at -10% 110%, rgba(197, 139, 255, .12), transparent 70%),
+      var(--night);
+    min-height: 100vh;
+    padding: 16px 16px 20px;
+  }
+  button, input, select, textarea { font: inherit; color: inherit; }
+  button { cursor: pointer; border: 0; background: none; }
+  :focus-visible { outline: 2px solid var(--blush); outline-offset: 2px; border-radius: 8px; }
+  .muted { color: var(--muted); }
+
+  /* ── шапка ── */
+  header { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 14px; }
+  .logo { font-family: "Unbounded", sans-serif; font-weight: 800; font-size: 18px; letter-spacing: -.02em; color: var(--blush); }
+  .logo b { color: var(--hot); font-weight: 800; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; background: var(--surface); font-size: 12px; font-weight: 700; color: var(--muted); }
+  .chip i { width: 7px; height: 7px; border-radius: 50%; background: #6b4560; }
+  .chip.ok i { background: var(--ok); }
+  .chip.bad i { background: #ff6b8b; }
+  .chip.live { background: var(--hot); color: #fff; }
+  .chip.live i { background: #fff; animation: pulse 1.6s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .35; } }
+
+  .layout { display: grid; gap: 14px; }
+  @media (min-width: 880px) { .layout { grid-template-columns: 400px 1fr; align-items: start; } }
+
+  /* ── зараз грає ── */
+  .player { background: var(--surface); border-radius: var(--r-lg); padding: 16px; position: relative; overflow: hidden; }
+  .deck { position: relative; height: 150px; margin-bottom: 14px; }
+  .sleeve { position: absolute; left: 0; top: 0; width: 150px; height: 150px; border-radius: 18px; z-index: 2;
+    background: linear-gradient(135deg, var(--hot), #c58bff) center / cover no-repeat;
+    box-shadow: 0 14px 30px -14px rgba(0,0,0,.7), 0 0 0 2px rgba(255,255,255,.08); }
+  .vinyl { position: absolute; left: 92px; top: 6px; width: 138px; height: 138px; border-radius: 50%; z-index: 1; transition: left .7s cubic-bezier(.65,0,.35,1); }
+  .deck.swap .vinyl { left: 8px; }
+  .grooves { position: absolute; inset: 0; border-radius: 50%;
+    background: repeating-radial-gradient(circle, #12030d 0 1.3px, #2d0b23 1.7px 2.8px);
+    animation: spin 2.6s linear infinite; will-change: transform; }
+  .label { position: absolute; inset: 31%; border-radius: 50%; background: var(--hot) center / cover; box-shadow: 0 0 0 2px #12030d; }
+  .label::after { content: ""; position: absolute; inset: 44%; border-radius: 50%; background: var(--surface); }
+  .sheen { position: absolute; inset: 0; border-radius: 50%; pointer-events: none;
+    background: conic-gradient(from 30deg, transparent 0 10%, rgba(255,255,255,.14) 14%, transparent 20% 52%, rgba(255,179,214,.18) 58%, transparent 64%); }
+  .player:not(.playing) .grooves { animation-play-state: paused; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .who { display: inline-block; font-size: 12px; font-weight: 800; padding: 4px 10px; border-radius: 999px; background: var(--hot); color: #fff; align-self: flex-start; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .who.plain { background: var(--raised); color: var(--muted); }
+  .who:empty { display: none; }
+
+  .t-title { font-family: "Unbounded", sans-serif; font-weight: 800; font-size: 20px; line-height: 1.2; letter-spacing: -.01em;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .t-artist { color: var(--blush); font-weight: 700; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .progress { display: grid; grid-template-columns: 38px 1fr 38px; gap: 8px; align-items: center; margin: 12px 0 14px; font-size: 12px; font-weight: 800; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .progress span:last-child { text-align: right; }
+  .bar { height: 6px; border-radius: 6px; background: var(--raised); overflow: hidden; }
+  .fill { height: 100%; width: 0; background: linear-gradient(90deg, var(--hot), var(--blush)); border-radius: inherit; transition: width 1s linear; }
+
+  .controls { display: flex; align-items: center; gap: 10px; }
+  .round { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; background: var(--raised); transition: background .15s, transform .1s; }
+  .round:hover { background: var(--line); }
+  .round:active { transform: scale(.94); }
+  .round.big { width: 58px; height: 58px; background: var(--hot); box-shadow: 0 10px 24px -10px var(--hot); }
+  .round.big:hover { background: #ff5aab; }
+  .round svg { width: 20px; height: 20px; fill: currentColor; }
+  .round.big svg { width: 24px; height: 24px; fill: #fff; }
+  .vol { flex: 1; display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .vol svg { width: 18px; height: 18px; fill: var(--muted); flex: none; }
+  input[type=range] { width: 100%; accent-color: var(--hot); }
+  .vol b { width: 28px; text-align: right; font-variant-numeric: tabular-nums; }
+
+  .onair { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; padding: 12px 14px; border-radius: var(--r-md); background: var(--raised); }
+  .onair p { font-size: 12px; }
+
+  /* перемикач */
+  .switch { position: relative; width: 46px; height: 26px; flex: none; }
+  .switch input { position: absolute; opacity: 0; inset: 0; cursor: pointer; z-index: 1; }
+  .switch span { position: absolute; inset: 0; border-radius: 999px; background: var(--line); transition: background .2s; }
+  .switch span::after { content: ""; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: var(--pearl); transition: transform .2s; }
+  .switch input:checked + span { background: var(--hot); }
+  .switch input:checked + span::after { transform: translateX(20px); }
+  .switch input:focus-visible + span { outline: 2px solid var(--blush); outline-offset: 2px; }
+
+  /* ── вкладки ── */
+  .panel { background: var(--surface); border-radius: var(--r-lg); padding: 6px; }
+  .tabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; padding: 4px; background: var(--night); border-radius: 16px; }
+  .tab { padding: 9px 4px; border-radius: 12px; font-weight: 800; color: var(--muted); transition: background .15s, color .15s; }
+  .tab[aria-selected=true] { background: var(--raised); color: var(--pearl); }
+  .tab .n { display: inline-block; min-width: 18px; padding: 0 5px; margin-left: 4px; border-radius: 999px; background: var(--hot); color: #fff; font-size: 11px; }
+  .tab .n:empty { display: none; }
+  .view { padding: 12px 8px 8px; }
+  .view[hidden] { display: none; }
+
+  .list { list-style: none; display: grid; gap: 6px; }
+  .item { display: grid; grid-template-columns: 44px 1fr auto; gap: 10px; align-items: center; padding: 7px; border-radius: var(--r-md); background: var(--night); }
+  .item .cv { width: 44px; height: 44px; border-radius: 10px; background: var(--raised) center / cover; }
+  .item .tt { font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .item .aa { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .acts { display: flex; gap: 4px; }
+  .ib { min-width: 32px; height: 32px; padding: 0 9px; border-radius: 10px; background: var(--raised); font-size: 12px; font-weight: 800; display: inline-grid; place-items: center; }
+  .ib:hover { background: var(--line); }
+  .ib.pink { background: var(--hot); color: #fff; }
+  .ib:disabled { opacity: .35; cursor: default; }
+  .ib svg { width: 15px; height: 15px; fill: currentColor; }
+  .empty { padding: 26px 12px; text-align: center; color: var(--muted); }
+  .empty b { display: block; color: var(--pearl); font-size: 15px; margin-bottom: 4px; }
+  .rowhead { display: flex; justify-content: space-between; align-items: center; margin: 0 2px 10px; }
+  .rowhead h3 { font-size: 13px; font-weight: 800; color: var(--muted); }
+  .link { color: var(--blush); font-weight: 800; font-size: 12px; }
+  .link:hover { text-decoration: underline; }
+
+  .search { display: flex; gap: 6px; margin-bottom: 10px; }
+  .search input { flex: 1; min-width: 0; padding: 11px 14px; border-radius: var(--r-md); border: 1px solid var(--line); background: var(--night); }
+  .search input::placeholder { color: #8d6481; }
+  .search button { padding: 0 16px; border-radius: var(--r-md); background: var(--hot); color: #fff; font-weight: 800; }
+
+  /* правила */
+  .form { display: grid; gap: 8px; }
+  .field { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 12px; border-radius: var(--r-md); background: var(--night); }
+  .field label, .field .lbl { font-weight: 700; }
+  .field small { display: block; color: var(--muted); font-size: 12px; font-weight: 500; }
+  .num { display: flex; align-items: center; gap: 4px; }
+  .num input { width: 58px; text-align: center; padding: 6px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--surface); font-weight: 800; }
+  .seg { display: flex; padding: 3px; gap: 2px; border-radius: 12px; background: var(--surface); }
+  .seg button { padding: 6px 10px; border-radius: 9px; font-size: 12px; font-weight: 800; color: var(--muted); }
+  .seg button[aria-pressed=true] { background: var(--hot); color: #fff; }
+  .field.col { flex-direction: column; align-items: stretch; }
+  .field textarea, .field input[type=text] { width: 100%; padding: 9px 11px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--surface); resize: vertical; }
+  .group { font-size: 12px; font-weight: 800; color: var(--muted); margin: 10px 4px 2px; }
+
+  footer { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 14px; font-size: 12px; }
+  .ghost { padding: 8px 12px; border-radius: 12px; background: var(--surface); font-weight: 800; color: var(--muted); }
+  .ghost:hover { color: var(--pearl); }
+  .ghost.danger:hover { background: #5c1027; color: #ffd0dc; }
+
+  .toast { position: fixed; left: 50%; bottom: 18px; transform: translate(-50%, 20px); opacity: 0; padding: 10px 16px; border-radius: 999px;
+    background: var(--pearl); color: var(--night); font-weight: 800; transition: .25s; pointer-events: none; z-index: 10; }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+  .offline { position: fixed; inset: 0; z-index: 20; display: none; place-items: center; text-align: center; padding: 30px; background: rgba(28, 7, 22, .94); }
+  .offline.show { display: grid; }
+  .offline h2 { font-family: "Unbounded", sans-serif; font-size: 18px; color: var(--blush); margin-bottom: 8px; }
+
+  @media (max-width: 430px) {
+    .deck { height: 120px; } .sleeve { width: 120px; height: 120px; } .vinyl { left: 70px; width: 110px; height: 110px; }
+  }
+  @media (prefers-reduced-motion: reduce) { *, *::after { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">pipa<b>bobik</b></div>
+  <div class="chips" id="chips"></div>
+</header>
+
+<div class="layout">
+  <section class="player" id="player" aria-label="Зараз грає">
+    <div class="deck" id="deck">
+      <div class="vinyl"><div class="grooves"><div class="label" id="label"></div></div><div class="sheen"></div></div>
+      <div class="sleeve" id="sleeve"></div>
+    </div>
+    <div class="who" id="who"></div>
+    <div class="t-title" id="title" style="margin-top:8px">Нічого не грає</div>
+    <div class="t-artist" id="artist">Замовлення з чату з'являться тут</div>
+    <div class="progress"><span id="cur">0:00</span><div class="bar"><div class="fill" id="fill"></div></div><span id="dur">0:00</span></div>
+    <div class="controls">
+      <button class="round big" id="playBtn" aria-label="Пауза"><svg viewBox="0 0 24 24" id="playIcon"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg></button>
+      <button class="round" data-act="skip" aria-label="Пропустити трек" title="Пропустити"><svg viewBox="0 0 24 24"><path d="M5 5l9 7-9 7zM16 5h3v14h-3z"/></svg></button>
+      <button class="round" data-act="ban" aria-label="Заборонити трек" title="Заборонити цей трек і пропустити"><svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm0 3a7 7 0 015.7 11.1L7.9 6.3A7 7 0 0112 5zm0 14a7 7 0 01-5.7-11.1l9.8 9.8A7 7 0 0112 19z"/></svg></button>
+      <label class="vol" title="Гучність"><svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4zM16 8.5a5 5 0 010 7l-1.4-1.4a3 3 0 000-4.2z"/></svg>
+        <input type="range" min="0" max="100" id="vol" aria-label="Гучність"><b id="volv"></b></label>
+    </div>
+    <div class="onair">
+      <div><b>Музика</b><p class="muted" id="onairHint">Вмикається сама з початком трансляції</p></div>
+      <label class="switch"><input type="checkbox" id="onair" aria-label="Увімкнути музику"><span></span></label>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="tabs" role="tablist">
+      <button class="tab" role="tab" aria-selected="true" data-tab="queue">Черга<span class="n" id="qn"></span></button>
+      <button class="tab" role="tab" aria-selected="false" data-tab="add">Додати</button>
+      <button class="tab" role="tab" aria-selected="false" data-tab="rules">Правила</button>
+      <button class="tab" role="tab" aria-selected="false" data-tab="history">Історія</button>
+    </div>
+
+    <div class="view" id="v-queue">
+      <div class="rowhead"><h3 id="qhead">Далі в черзі</h3><button class="link" id="clearBtn">Очистити</button></div>
+      <ol class="list" id="queue"></ol>
+    </div>
+
+    <div class="view" id="v-add" hidden>
+      <form class="search" id="searchForm">
+        <input id="q" type="search" placeholder="Виконавець і назва або посилання YouTube" autocomplete="off" aria-label="Пошук треку">
+        <button type="submit">Знайти</button>
+      </form>
+      <ul class="list" id="results"><li class="empty"><b>Додайте трек без команд</b>Знайдіть пісню і поставте в чергу, наступною або одразу.</li></ul>
+    </div>
+
+    <div class="view" id="v-rules" hidden>
+      <div class="form" id="rules">
+        <div class="group">Хто замовляє</div>
+        <div class="field"><span class="lbl">Замовлення доступні</span>
+          <div class="seg" id="who_can_request">
+            <button data-v="all">Усім</button><button data-v="subs">Сабам</button><button data-v="vip">VIP</button><button data-v="mods">Модерам</button>
+          </div></div>
+        <div class="field"><label for="max_duration">Найдовший трек<small>хвилин, модераторам можна довше</small></label>
+          <div class="num"><input type="number" id="max_duration" min="1" max="60" data-scale="60" data-key="rules.max_duration"></div></div>
+        <div class="field"><label for="max_per_user">Треків від однієї людини<small>одночасно в черзі</small></label>
+          <div class="num"><input type="number" id="max_per_user" min="0" max="20" data-key="rules.max_per_user"></div></div>
+        <div class="field"><label for="cooldown">Пауза між замовленнями<small>секунд</small></label>
+          <div class="num"><input type="number" id="cooldown" min="0" max="3600" data-key="rules.cooldown"></div></div>
+        <div class="field"><label for="max_queue">Розмір черги</label>
+          <div class="num"><input type="number" id="max_queue" min="1" max="200" data-key="rules.max_queue"></div></div>
+
+        <div class="group">Що грає</div>
+        <div class="field"><label for="only_songs">Лише пісні з YouTube Music<small>без кліпів, «10 годин…» і відео з балачками</small></label>
+          <label class="switch"><input type="checkbox" id="only_songs" data-key="rules.only_songs"><span></span></label></div>
+        <div class="field"><label for="block_explicit">Без треків Explicit</label>
+          <label class="switch"><input type="checkbox" id="block_explicit" data-key="rules.block_explicit"><span></span></label></div>
+        <div class="field"><label for="interrupt_fallback">Замовлення перебиває фонову музику</label>
+          <label class="switch"><input type="checkbox" id="interrupt_fallback" data-key="rules.interrupt_fallback"><span></span></label></div>
+        <div class="field"><label for="normalize">Вирівнювати гучність<small>з наступного треку</small></label>
+          <label class="switch"><input type="checkbox" id="normalize" data-key="player.normalize"><span></span></label></div>
+        <div class="field col"><label for="fallback_playlist">Коли черга порожня<small>LM — ваші вподобані, посилання на плейлист, або порожньо для тиші</small></label>
+          <input type="text" id="fallback_playlist" data-key="google.fallback_playlist" placeholder="LM"></div>
+        <div class="field col"><label for="banned_words">Заборонені слова<small>через кому — треки з ними в назві не додаються</small></label>
+          <textarea id="banned_words" rows="2" data-key="rules.banned_words" placeholder="10 hours, earrape"></textarea></div>
+
+        <div class="group">Чат</div>
+        <div class="field"><label for="announce_tracks">Писати в чат про кожен трек</label>
+          <label class="switch"><input type="checkbox" id="announce_tracks" data-key="chat.announce_tracks"><span></span></label></div>
+        <div class="field"><label for="greet_on_stream_start">Вітатися на початку трансляції</label>
+          <label class="switch"><input type="checkbox" id="greet_on_stream_start" data-key="chat.greet_on_stream_start"><span></span></label></div>
+      </div>
+    </div>
+
+    <div class="view" id="v-history" hidden>
+      <div class="rowhead"><h3>Нещодавно грали</h3></div>
+      <ul class="list" id="history"></ul>
+      <div class="rowhead" style="margin-top:16px"><h3>Заборонені треки</h3></div>
+      <ul class="list" id="banned"></ul>
+    </div>
+  </section>
+</div>
+
+<footer>
+  <button class="ghost" id="copyWidget" title="Скопіювати адресу віджета для OBS">Адреса віджета</button>
+  <button class="ghost danger" id="quitBtn">Закрити бота</button>
+</footer>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<div class="offline" id="offline"><div><h2>Бот не запущено</h2><p class="muted">Він стартує разом з OBS. Якщо OBS уже відкрито — зачекайте кілька секунд.</p></div></div>
+
+<script>
+(() => {
+  const key = new URLSearchParams(location.search).get("key") || "";
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const fmt = (s) => { s = Math.max(0, Math.floor(s || 0)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
+  const cssUrl = (u) => u ? `url("${String(u).replace(/"/g, "%22")}")` : "";
+  let state = null, receivedAt = 0, currentId = null, volDrag = false;
+
+  function toast(text) {
+    const t = $("toast"); t.textContent = text; t.classList.add("show");
+    clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 1800);
+  }
+  async function api(path, body, method = "POST") {
+    const r = await fetch(path, { method, headers: { "Content-Type": "application/json", "X-Pipabobik-Key": key }, body: body ? JSON.stringify(body) : undefined });
+    if (r.status === 403) { toast("Невірний ключ — відкрийте панель через ярлик pipabobik"); throw new Error("403"); }
+    return r.json();
+  }
+  const control = (action, extra = {}) => api("/api/control", { action, ...extra });
+
+  // ── стан ──
+  const icons = {
+    pause: '<path d="M7 5h4v14H7zM13 5h4v14h-4z"/>',
+    play: '<path d="M8 5l11 7-11 7z"/>',
+  };
+
+  function renderChips(h, s) {
+    const c = [];
+    if (h.obs_live) c.push('<span class="chip live"><i></i>В ефірі</span>');
+    else if (h.obs_live === false) c.push('<span class="chip"><i></i>Не в ефірі</span>');
+    c.push(`<span class="chip ${h.twitch && h.chat ? "ok" : "bad"}" title="${h.twitch ? "Бот: " + esc(h.twitch) : "Увійдіть у Twitch на localhost:17777"}"><i></i>Twitch</span>`);
+    c.push(`<span class="chip ${h.mpv ? "ok" : "bad"}" title="${h.mpv ? "Програвач знайдено" : "mpv не знайдено"}"><i></i>Звук</span>`);
+    if (h.google !== null && h.google !== undefined)
+      c.push(`<span class="chip ${h.google ? "ok" : ""}" title="${h.google ? "Вхід у Google є" : "Без входу в Google"}"><i></i>Google</span>`);
+    $("chips").innerHTML = c.join("");
+  }
+
+  function renderNow(s) {
+    const n = s.now;
+    $("player").classList.toggle("playing", s.status === "playing");
+    $("playIcon").innerHTML = s.status === "paused" ? icons.play : icons.pause;
+    $("playBtn").setAttribute("aria-label", s.status === "paused" ? "Продовжити" : "Пауза");
+    $("onair").checked = !!s.active;
+    $("onairHint").textContent = s.active ? (s.status === "idle" ? "Увімкнено — чекаю на замовлення" : "Грає в ефірі")
+      : (s.health && s.health.obs_live === false ? "Вимкнено — увімкнеться з початком трансляції" : "Вимкнено");
+    if (!volDrag) { $("vol").value = s.volume; $("volv").textContent = s.volume; }
+
+    const id = n ? n.video_id : null;
+    if (id === currentId) return;
+    const fill = () => {
+      $("title").textContent = n ? n.title : "Нічого не грає";
+      $("artist").textContent = n ? (n.artist || "") : (s.active ? "Замовлення з чату з'являться тут" : "Музику вимкнено");
+      $("dur").textContent = n && n.duration ? fmt(n.duration) : "0:00";
+      const who = $("who");
+      if (n && n.source === "request") { who.textContent = `від @${n.requested_by}`; who.classList.remove("plain"); }
+      else if (n) { who.textContent = "фоновий плейлист"; who.classList.add("plain"); }
+      else who.textContent = "";
+      $("sleeve").style.backgroundImage = n ? cssUrl(n.cover) : "";
+      $("label").style.backgroundImage = n ? cssUrl(n.cover) : "";
+    };
+    if (currentId && id) { $("deck").classList.add("swap"); setTimeout(() => { fill(); $("deck").classList.remove("swap"); }, 650); }
+    else fill();
+    currentId = id;
+  }
+
+  function trackRow(t, actions) {
+    return `<li class="item"><div class="cv" style="background-image:${esc(cssUrl(t.cover))}"></div>
+      <div style="min-width:0"><div class="tt">${esc(t.title)}</div>
+      <div class="aa">${esc(t.artist || "")}${t.duration ? " · " + fmt(t.duration) : ""}${t.requested_by ? " · @" + esc(t.requested_by) : ""}</div></div>
+      <div class="acts">${actions}</div></li>`;
+  }
+
+  function renderQueue(s) {
+    $("qn").textContent = s.queue_len || "";
+    $("qhead").textContent = s.queue_len ? `Далі в черзі · ${s.queue_len}` : "Далі в черзі";
+    $("clearBtn").hidden = !s.queue_len;
+    $("queue").innerHTML = s.queue.length ? s.queue.map((t, i) => trackRow(t, `
+        <button class="ib" data-q="next" data-i="${i}" title="Зіграти наступним" aria-label="Зіграти наступним" ${i === 0 ? "disabled" : ""}>
+          <svg viewBox="0 0 24 24"><path d="M5 4h14v3H5zM12 9l6 7h-4v4h-4v-4H6z"/></svg></button>
+        <button class="ib" data-q="remove" data-i="${i}" title="Прибрати" aria-label="Прибрати з черги">
+          <svg viewBox="0 0 24 24"><path d="M6.4 5L5 6.4 10.6 12 5 17.6 6.4 19l5.6-5.6 5.6 5.6 1.4-1.4-5.6-5.6L19 6.4 17.6 5 12 10.6z"/></svg></button>`)).join("")
+      : `<li class="empty"><b>Черга порожня</b>Глядачі замовляють командою в чаті, а ви — у вкладці «Додати».</li>`;
+  }
+
+  function renderHistory(s) {
+    $("history").innerHTML = (s.history || []).length ? s.history.map((t) => trackRow(t,
+      `<button class="ib" data-again='${esc(JSON.stringify(t))}' title="Поставити в чергу ще раз">Ще раз</button>`)).join("")
+      : `<li class="empty">Тут з'являться треки, що вже відіграли.</li>`;
+    $("banned").innerHTML = (s.banned || []).length ? s.banned.map((b) =>
+      `<li class="item" style="grid-template-columns:1fr auto"><div class="tt">${esc(b.label)}</div>
+       <button class="ib" data-unban="${esc(b.video_id)}">Розбанити</button></li>`).join("")
+      : `<li class="empty">Заборонених треків немає.</li>`;
+  }
+
+  function apply(s) {
+    state = s; receivedAt = performance.now();
+    $("offline").classList.remove("show");
+    renderChips(s.health || {}, s); renderNow(s); renderQueue(s); renderHistory(s); tick();
+  }
+
+  function tick() {
+    if (!state || document.hidden) return;
+    const n = state.now;
+    if (!n || state.status === "loading") { $("cur").textContent = "0:00"; $("fill").style.width = "0%"; return; }
+    let el = n.elapsed || 0;
+    if (state.status === "playing") el += (performance.now() - receivedAt) / 1000;
+    if (n.duration) el = Math.min(el, n.duration);
+    $("cur").textContent = fmt(el);
+    $("fill").style.width = n.duration ? `${(el / n.duration) * 100}%` : "0%";
+  }
+  setInterval(tick, 1000);
+
+  let offlineTimer = null;
+  const connect = () => {
+    const es = new EventSource("/api/events");
+    es.onmessage = (e) => { clearTimeout(offlineTimer); offlineTimer = null; apply(JSON.parse(e.data)); };
+    es.onerror = () => {
+      es.close();
+      // показуємо «бот не запущено», лише якщо зв'язку немає довше кількох секунд
+      offlineTimer ??= setTimeout(() => $("offline").classList.add("show"), 4000);
+      setTimeout(connect, 2000);
+    };
+  };
+  connect();
+
+  // ── керування ──
+  $("playBtn").onclick = () => {
+    if (!state) return;
+    if (!state.active) control("on");
+    else control("pause");
+  };
+  document.querySelectorAll("[data-act]").forEach((b) => b.onclick = () => {
+    if (!state || !state.now) return toast("Зараз нічого не грає");
+    control(b.dataset.act).then(() => toast(b.dataset.act === "ban" ? "Трек заборонено" : "Пропущено"));
+  });
+  $("vol").oninput = (e) => { volDrag = true; $("volv").textContent = e.target.value; };
+  $("vol").onchange = (e) => { volDrag = false; control("volume", { value: +e.target.value }); };
+  $("onair").onchange = (e) => control(e.target.checked ? "on" : "off").then(() => toast(e.target.checked ? "Музику увімкнено" : "Музику вимкнено"));
+  $("clearBtn").onclick = () => { if (confirm("Очистити всю чергу?")) control("clear").then(() => toast("Чергу очищено")); };
+
+  document.body.addEventListener("click", async (e) => {
+    const q = e.target.closest("[data-q]");
+    if (q) return control(q.dataset.q === "next" ? "next" : "remove", { index: +q.dataset.i });
+    const un = e.target.closest("[data-unban]");
+    if (un) { await control("unban", { video_id: un.dataset.unban }); return toast("Розбанено"); }
+    const again = e.target.closest("[data-again]");
+    if (again) { await api("/api/add", { track: JSON.parse(again.dataset.again), mode: "end" }); return toast("Додано в чергу"); }
+    const add = e.target.closest("[data-add]");
+    if (add) {
+      const t = lastResults[+add.dataset.i];
+      await api("/api/add", { track: t, mode: add.dataset.add });
+      toast({ end: "Додано в чергу", next: "Заграє наступним", now: "Вмикаю" }[add.dataset.add]);
+    }
+  });
+
+  // ── вкладки ──
+  document.querySelectorAll(".tab").forEach((t) => t.onclick = () => {
+    document.querySelectorAll(".tab").forEach((x) => x.setAttribute("aria-selected", x === t));
+    document.querySelectorAll(".view").forEach((v) => v.hidden = v.id !== "v-" + t.dataset.tab);
+    if (t.dataset.tab === "rules") loadSettings();
+    if (t.dataset.tab === "add") $("q").focus();
+  });
+
+  // ── пошук ──
+  let lastResults = [];
+  $("searchForm").onsubmit = async (e) => {
+    e.preventDefault();
+    const q = $("q").value.trim();
+    if (!q) return;
+    $("results").innerHTML = `<li class="empty">Шукаю…</li>`;
+    try {
+      const { results } = await api("/api/search", { q });
+      lastResults = results;
+      $("results").innerHTML = results.length ? results.map((t, i) => trackRow(t, `
+          <button class="ib pink" data-add="end" data-i="${i}" title="В кінець черги">В чергу</button>
+          <button class="ib" data-add="next" data-i="${i}" title="Зіграти наступним">Далі</button>
+          <button class="ib" data-add="now" data-i="${i}" title="Увімкнути зараз">Зараз</button>`)).join("")
+        : `<li class="empty"><b>Нічого не знайдено</b>Спробуйте «виконавець — назва».</li>`;
+    } catch { $("results").innerHTML = `<li class="empty">Пошук не вдався. Перевірте інтернет.</li>`; }
+  };
+
+  // ── правила ──
+  let saveTimer = null, pending = {};
+  async function loadSettings() {
+    const s = await api("/api/settings", null, "GET");
+    document.querySelectorAll("#rules [data-key]").forEach((el) => {
+      const [sec, k] = el.dataset.key.split(".");
+      let v = s[sec][k];
+      if (el.type === "checkbox") el.checked = !!v;
+      else if (Array.isArray(v)) el.value = v.join(", ");
+      else el.value = el.dataset.scale ? Math.round(v / +el.dataset.scale) : (v ?? "");
+    });
+    document.querySelectorAll("#who_can_request button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.v === s.rules.who_can_request));
+  }
+  function queueSave(sec, k, v) {
+    (pending[sec] ||= {})[k] = v;
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(async () => { const body = pending; pending = {}; await api("/api/settings", body); toast("Збережено"); }, 500);
+  }
+  document.querySelectorAll("#rules [data-key]").forEach((el) => {
+    el.addEventListener("change", () => {
+      const [sec, k] = el.dataset.key.split(".");
+      let v = el.type === "checkbox" ? el.checked : el.value;
+      if (el.type === "number") v = Math.max(0, +v || 0) * (+el.dataset.scale || 1);
+      queueSave(sec, k, v);
+    });
+  });
+  document.querySelectorAll("#who_can_request button").forEach((b) => b.onclick = () => {
+    document.querySelectorAll("#who_can_request button").forEach((x) => x.setAttribute("aria-pressed", x === b));
+    queueSave("rules", "who_can_request", b.dataset.v);
+  });
+
+  // ── низ ──
+  $("copyWidget").onclick = async () => {
+    const url = `${location.origin}/widget`;
+    try { await navigator.clipboard.writeText(url); toast("Скопійовано: " + url); } catch { prompt("Адреса віджета для OBS:", url); }
+  };
+  $("quitBtn").onclick = () => { if (confirm("Закрити бота? Музика зупиниться, черга збережеться.")) control("shutdown"); };
+})();
+</script>
+</body>
+</html>

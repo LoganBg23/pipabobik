@@ -142,6 +142,7 @@ def main() -> int:
     ap.add_argument("--check", action="store_true", help="діагностика")
     ap.add_argument("--obs", action="store_true", help="запуск з OBS: музика грає лише під час трансляції")
     ap.add_argument("--live", action="store_true", help="разом з --obs: трансляція вже йде")
+    ap.add_argument("--paused", action="store_true", help="не вмикати музику одразу (вмикається з панелі)")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
 
@@ -153,7 +154,7 @@ def main() -> int:
     from pipabobik.app import Bot, setup_logging
 
     setup_logging(args.verbose)
-    bot = Bot(load_config(), obs_mode=args.obs, live=args.live)
+    bot = Bot(load_config(), obs_mode=args.obs, live=args.live, paused=args.paused)
     try:
         return asyncio.run(bot.run())
     except KeyboardInterrupt:

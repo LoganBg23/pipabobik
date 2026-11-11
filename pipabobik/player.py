@@ -89,10 +89,19 @@ class Player:
             "--title=pipabobik",
             f"--volume={self.volume}",
             f"--input-ipc-server={self._ipc}",
+            # нічого зайвого: без конфігів, скриптів, OSD та ytdl-хука (посилання вже пряме)
+            "--config=no",
+            "--load-scripts=no",
+            "--osc=no",
+            "--ytdl=no",
+            "--input-default-bindings=no",
             "--cache=yes",
+            "--demuxer-max-bytes=16MiB",
+            "--demuxer-readahead-secs=30",
         ]
         if self.normalize:
-            cmd.append("--af=lavfi=[loudnorm=I=-16:TP=-1.5:LRA=11]")
+            # dynaudnorm працює на рідній частоті — у рази легший за loudnorm (той передискретизує до 192 кГц)
+            cmd.append("--af=lavfi=[dynaudnorm=f=300:g=15:p=0.9:m=6]")
         if self.audio_device:
             cmd.append(f"--audio-device={self.audio_device}")
         for k, v in headers.items():

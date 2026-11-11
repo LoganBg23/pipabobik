@@ -5,6 +5,7 @@ import asyncio
 import logging
 import random
 import re
+import threading
 import time
 from dataclasses import asdict, dataclass, field
 from functools import partial
@@ -100,6 +101,10 @@ class MusicSource:
         self.cookies_file = (cookies_file or "").strip()
         self._ytm = None
         self._cookies_broken = False
+        # Один екземпляр yt-dlp на тип запиту: cookies з Firefox читаються раз,
+        # а розшифровка плеєра YouTube кешується в пам'яті — менше навантаження на кожен трек.
+        self._ydl: dict[str, tuple[object, float]] = {}
+        self._ydl_lock = threading.Lock()
 
     # ── ytmusicapi ──
     @property
@@ -189,26 +194,53 @@ class MusicSource:
             opts["cookiesfrombrowser"] = (self.cookies_from_browser, None, None, None)
         return opts
 
-    def _ydl_info(self, url: str, flat: bool, stream: bool = True) -> dict | None:
-        import yt_dlp
-
+    def _opts_for(self, kind: str) -> dict:
         opts = self.ydl_opts()
-        if flat:
+        if kind == "flat":
             opts.update({"extract_flat": "in_playlist", "noplaylist": False})
             opts.pop("format", None)
-        if not stream and not flat:
+        elif kind == "meta":
             opts.pop("format", None)
             opts["skip_download"] = True
+        return opts
+
+    def _get_ydl(self, kind: str):
+        import yt_dlp
+
+        inst, created = self._ydl.get(kind, (None, 0.0))
+        if inst is None or time.time() - created > 6 * 3600:  # раз на 6 год перечитуємо cookies
+            if inst is not None:
+                try:
+                    inst.close()
+                except Exception:  # noqa: BLE001
+                    pass
+            inst = yt_dlp.YoutubeDL(self._opts_for(kind))
+            self._ydl[kind] = (inst, time.time())
+        return inst
+
+    def _drop_ydl(self) -> None:
+        for inst, _ in self._ydl.values():
+            try:
+                inst.close()
+            except Exception:  # noqa: BLE001
+                pass
+        self._ydl.clear()
+
+    def _ydl_info(self, url: str, flat: bool, stream: bool = True) -> dict | None:
+        kind = "flat" if flat else ("stream" if stream else "meta")
         try:
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                return ydl.extract_info(url, download=False)
+            with self._ydl_lock:
+                return self._get_ydl(kind).extract_info(url, download=False)
         except Exception as e:  # noqa: BLE001
             text = str(e)
+            opts = self._opts_for(kind)
             has_cookies = "cookiefile" in opts or "cookiesfrombrowser" in opts
             if has_cookies and ("cookie" in text.lower() or "firefox" in text.lower()):
                 # логін недоступний (Firefox не встановлено / профіль заблоковано) — граємо без нього
                 log.warning("Логін Google недоступний (%s) — працюю без нього", text.splitlines()[0][:200])
                 self._cookies_broken = True
+                with self._ydl_lock:
+                    self._drop_ydl()
                 return self._ydl_info(url, flat, stream)
             log.warning("yt-dlp: %s", text.splitlines()[0][:300])
             return None

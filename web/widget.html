@@ -35,10 +35,14 @@
     transition: opacity .5s ease, transform .5s ease;
   }
   .stage.hidden { opacity: 0; transform: scale(var(--scale)) translateY(14px); }
+  .stage.gone { visibility: hidden; }
+  /* поки віджет схований — анімації стоять і не вантажать OBS */
+  .stage.hidden .grooves, .stage.hidden .title.scroll { animation-play-state: paused; }
 
   /* ── картка ── */
   .card {
     position: relative;
+    contain: layout style;
     display: grid;
     grid-template-columns: 218px 1fr;
     align-items: center;
@@ -58,7 +62,7 @@
   /* зерно — щоб градієнт не був «пластиковим» */
   .card::after {
     content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
-    opacity: .18; mix-blend-mode: multiply;
+    opacity: .10;
     background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .9  0 0 0 0 .3  0 0 0 0 .6  0 0 0 .55 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
   }
 
@@ -83,6 +87,7 @@
       repeating-radial-gradient(circle, #2a0920 0 1.2px, #43102f 1.6px 2.6px);
     box-shadow: 0 6px 16px -6px rgba(58, 13, 44, .7);
     animation: spin 2.6s linear infinite;
+    will-change: transform; /* обертання на відеокарті, без перемальовування */
   }
   .label {
     position: absolute; inset: 31%; border-radius: 50%;
@@ -111,7 +116,7 @@
     font-weight: 800; font-size: 23px; line-height: 1.15; letter-spacing: -.01em;
     color: var(--plum);
   }
-  .title.scroll { animation: marquee var(--dur, 12s) linear infinite; padding-right: 60px; }
+  .title.scroll { animation: marquee var(--dur, 12s) linear infinite; padding-right: 60px; will-change: transform; }
   @keyframes marquee { 0%, 12% { transform: translateX(0); } 88%, 100% { transform: translateX(var(--shift)); } }
   .artist {
     font-weight: 700; font-size: 15px; color: #8a2f68;
@@ -123,7 +128,7 @@
   .fill {
     height: 100%; width: 0; border-radius: inherit;
     background: linear-gradient(90deg, var(--hot), #ff7ab9 70%, var(--lilac));
-    transition: width .25s linear;
+    transition: width 1s linear;
   }
 
   /* ── наліпка із замовником ── */
@@ -227,7 +232,7 @@
 
     if (now && live) {
       card.classList.remove("hint");
-      stage.classList.remove("hidden");
+      show();
       if (now.video_id !== currentId) {
         const first = currentId === null;
         currentId = now.video_id;
@@ -243,18 +248,27 @@
     currentId = null;
     if (idleMode === "hint" && state && state.active) {
       card.classList.add("hint");
-      stage.classList.remove("hidden");
+      show();
       setCover("");
       $("title").textContent = "Замов трек!";
       $("artist").textContent = `${cmd} виконавець — назва`;
       $("sticker").textContent = "";
       requestAnimationFrame(fitTitle);
     } else {
-      stage.classList.add("hidden");
+      hide();
     }
   }
 
+  let goneTimer = null;
+  function show() { clearTimeout(goneTimer); stage.classList.remove("gone", "hidden"); }
+  function hide() {
+    if (stage.classList.contains("hidden")) return;
+    stage.classList.add("hidden");
+    goneTimer = setTimeout(() => stage.classList.add("gone"), 600);
+  }
+
   function tick() {
+    if (document.hidden || stage.classList.contains("hidden")) return;
     const now = state && state.now;
     if (now && state.status !== "loading") {
       let el = now.elapsed || 0;
@@ -282,7 +296,7 @@
     };
     connect();
   }
-  setInterval(tick, 250);
+  setInterval(tick, 1000);  // раз на секунду + плавний CSS-перехід
   window.addEventListener("resize", fitTitle);
 })();
 </script>
