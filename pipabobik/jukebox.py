@@ -32,6 +32,7 @@ class Jukebox:
         self.banned_ids: set[str] = set()
         self.banned_meta: dict[str, str] = {}
         self.allowed_ids: set[str] = set()  # розбанені вручну — фільтр їх більше не чіпає
+        self.liked_ids: set[str] = set()  # лайкнуті з панелі в YouTube Music
         # async (track) -> причина або None; задається ботом (фільтр російської музики)
         self.content_filter: Callable[[Track], Awaitable[str | None]] | None = None
         self.last_request: dict[str, float] = {}
@@ -58,6 +59,10 @@ class Jukebox:
     def _allow_file(self) -> Path:
         return self.data_dir / "allowed.json"
 
+    @property
+    def _liked_file(self) -> Path:
+        return self.data_dir / "liked.json"
+
     def _load(self) -> None:
         try:
             if self._queue_file.exists():
@@ -73,6 +78,8 @@ class Jukebox:
                 self.banned_ids = set(self.banned_meta)
             if self._allow_file.exists():
                 self.allowed_ids = set(json.loads(self._allow_file.read_text(encoding="utf-8")))
+            if self._liked_file.exists():
+                self.liked_ids = set(json.loads(self._liked_file.read_text(encoding="utf-8")))
         except (OSError, ValueError, TypeError) as e:
             log.warning("Не вдалося відновити дані: %s", e)
 
@@ -85,6 +92,7 @@ class Jukebox:
         meta = {vid: self.banned_meta.get(vid, vid) for vid in sorted(self.banned_ids)}
         self._ban_file.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
         self._allow_file.write_text(json.dumps(sorted(self.allowed_ids)), encoding="utf-8")
+        self._liked_file.write_text(json.dumps(sorted(self.liked_ids)), encoding="utf-8")
 
     def changed(self) -> None:
         for cb in list(self.listeners):
@@ -230,6 +238,16 @@ class Jukebox:
             await self.skip()
         return cur
 
+    async def like(self, video_id: str, like: bool) -> None:
+        """Лайкає трек у YouTube Music (через ваш вхід Google) і запам'ятовує це."""
+        await self.music.rate(video_id, like)
+        if like:
+            self.liked_ids.add(video_id)
+        else:
+            self.liked_ids.discard(video_id)
+        self.save()
+        self.changed()
+
     async def set_pause(self, paused: bool) -> None:
         await self.player.set_pause(paused)
         self.changed()
@@ -266,6 +284,7 @@ class Jukebox:
             now = self.now.to_dict()
             now["elapsed"] = round(self.player.position, 2)
             now["url"] = self.now.url
+            now["liked"] = self.now.video_id in self.liked_ids
         if not self.active:
             status = "offline"
         elif self.loading:
@@ -283,7 +302,7 @@ class Jukebox:
             "queue_len": len(self.queue),
             "volume": self.player.volume,
             "active": self.active,
-            "history": [t.to_dict() for t in list(self.history)[-8:][::-1]],
+            "history": [dict(t.to_dict(), liked=t.video_id in self.liked_ids) for t in list(self.history)[-8:][::-1]],
             "banned": [{"video_id": k, "label": v} for k, v in self.banned_meta.items() if k in self.banned_ids],
         }
 

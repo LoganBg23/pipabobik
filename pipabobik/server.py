@@ -162,6 +162,20 @@ class Server:
             jb.clear()
         elif action == "unban":
             jb.unban(str(d.get("video_id", "")))
+        elif action == "like":
+            from .music import LoginRequired
+
+            vid = str(d.get("video_id") or (jb.now.video_id if jb.now else ""))
+            if not vid:
+                return web.json_response({"error": "Зараз нічого не грає"}, status=409)
+            want = bool(d["like"]) if "like" in d else vid not in jb.liked_ids
+            try:
+                await jb.like(vid, want)
+            except LoginRequired:
+                return web.json_response({"error": "Щоб лайкати, увійдіть у music.youtube.com у Firefox і перезапустіть бота"}, status=409)
+            except Exception as e:  # noqa: BLE001
+                log.warning("Лайк не вдався: %s", e)
+                return web.json_response({"error": "YouTube Music не прийняв лайк — спробуйте ще раз"}, status=502)
         elif action == "ban":
             await jb.ban_current()
         elif action == "on":

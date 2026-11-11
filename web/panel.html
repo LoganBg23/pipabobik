@@ -42,6 +42,7 @@
 <div class="row">
   <button class="main" data-a="skip">Пропустити</button>
   <button data-a="pause" id="pauseBtn">Пауза</button>
+  <button id="likeBtn" title="Лайкнути в YouTube Music" aria-label="Лайкнути в YouTube Music">♡</button>
   <button data-a="ban" title="Заборонити цей трек на каналі й пропустити">Забанити трек</button>
 </div>
 <div class="row" style="margin-top:-4px">
@@ -64,6 +65,12 @@
     if (r.status === 403) { $("err").textContent = "Невірний ключ панелі. Скопіюйте адресу панелі з консолі бота або з http://localhost:17777"; $("err").style.display = "block"; }
   }
   document.querySelectorAll("button[data-a]").forEach(b => b.onclick = () => control(b.dataset.a));
+  let cur = null;
+  $("likeBtn").onclick = async () => {
+    if (!cur) return;
+    const r = await fetch("/api/control", { method:"POST", headers:{ "Content-Type":"application/json", "X-Pipabobik-Key":key }, body:JSON.stringify({ action:"like", video_id:cur.video_id, like:!cur.liked }) });
+    if (!r.ok) { const d = await r.json().catch(() => ({})); $("err").textContent = d.error || "Лайк не вдався"; $("err").style.display = "block"; setTimeout(() => $("err").style.display = "none", 4000); }
+  };
   $("quitBtn").onclick = () => { if (confirm("Закрити бота? Музика зупиниться, черга збережеться.")) control("shutdown"); };
   const vol = $("vol");
   vol.oninput = () => { dragging = true; $("volv").textContent = vol.value; };
@@ -75,6 +82,9 @@
     $("status").textContent = labels[s.status] || s.status;
     $("status").classList.toggle("on", s.status === "playing");
     const n = s.now;
+    cur = n;
+    $("likeBtn").textContent = n && n.liked ? "♥" : "♡";
+    $("likeBtn").style.color = n && n.liked ? "var(--hot)" : "";
     $("title").textContent = n ? n.title : "Нічого не грає";
     $("artist").textContent = n ? `${n.artist || ""}${n.source === "request" ? " · від @" + n.requested_by : " · фоновий плейлист"}` : "";
     $("cover").style.backgroundImage = n && n.cover ? `url("${n.cover}")` : "";

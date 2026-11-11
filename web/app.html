@@ -93,6 +93,14 @@
   .round.big:hover { background: #ff5aab; }
   .round svg { width: 20px; height: 20px; fill: currentColor; }
   .round.big svg { width: 24px; height: 24px; fill: #fff; }
+  .round.heart svg { fill: none; stroke: currentColor; stroke-width: 2; }
+  .round.heart.on { color: var(--hot); background: rgba(255, 61, 154, .16); }
+  .round.heart.on svg { fill: currentColor; }
+  .round.heart.pop { animation: pop .35s ease; }
+  @keyframes pop { 40% { transform: scale(1.25); } }
+  .ib.heart svg { fill: none; stroke: currentColor; stroke-width: 2; }
+  .ib.heart.on { color: var(--hot); }
+  .ib.heart.on svg { fill: currentColor; }
   .vol { flex: 1; display: flex; align-items: center; gap: 8px; min-width: 0; }
   .vol svg { width: 18px; height: 18px; fill: var(--muted); flex: none; }
   input[type=range] { width: 100%; accent-color: var(--hot); }
@@ -195,6 +203,7 @@
     <div class="controls">
       <button class="round big" id="playBtn" aria-label="Пауза"><svg viewBox="0 0 24 24" id="playIcon"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg></button>
       <button class="round" data-act="skip" aria-label="Пропустити трек" title="Пропустити"><svg viewBox="0 0 24 24"><path d="M5 5l9 7-9 7zM16 5h3v14h-3z"/></svg></button>
+      <button class="round heart" id="likeBtn" aria-pressed="false" aria-label="Лайкнути в YouTube Music" title="Лайкнути в YouTube Music"><svg viewBox="0 0 24 24"><path d="M12 20.5s-7.5-4.6-9.3-9.2C1.5 8 3.6 4.5 7.1 4.5c2 0 3.6 1.1 4.9 2.9 1.3-1.8 2.9-2.9 4.9-2.9 3.5 0 5.6 3.5 4.4 6.8-1.8 4.6-9.3 9.2-9.3 9.2z"/></svg></button>
       <button class="round" data-act="ban" aria-label="Заборонити трек" title="Заборонити цей трек і пропустити"><svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm0 3a7 7 0 015.7 11.1L7.9 6.3A7 7 0 0112 5zm0 14a7 7 0 01-5.7-11.1l9.8 9.8A7 7 0 0112 19z"/></svg></button>
       <label class="vol" title="Гучність"><svg viewBox="0 0 24 24"><path d="M4 9h4l5-4v14l-5-4H4zM16 8.5a5 5 0 010 7l-1.4-1.4a3 3 0 000-4.2z"/></svg>
         <input type="range" min="0" max="100" id="vol" aria-label="Гучність"><b id="volv"></b></label>
@@ -333,6 +342,10 @@
     $("onairHint").textContent = s.active ? (s.status === "idle" ? "Увімкнено — чекаю на замовлення" : "Грає в ефірі")
       : (s.health && s.health.obs_live === false ? "Вимкнено — увімкнеться з початком трансляції" : "Вимкнено");
     if (!volDrag) { $("vol").value = s.volume; $("volv").textContent = s.volume; }
+    const liked = !!(n && n.liked);
+    $("likeBtn").classList.toggle("on", liked);
+    $("likeBtn").setAttribute("aria-pressed", liked);
+    $("likeBtn").title = liked ? "Прибрати лайк у YouTube Music" : "Лайкнути в YouTube Music";
 
     const id = n ? n.video_id : null;
     if (id === currentId) return;
@@ -373,7 +386,8 @@
 
   function renderHistory(s) {
     $("history").innerHTML = (s.history || []).length ? s.history.map((t) => trackRow(t,
-      `<button class="ib" data-again='${esc(JSON.stringify(t))}' title="Поставити в чергу ще раз">Ще раз</button>`)).join("")
+      `<button class="ib heart ${t.liked ? "on" : ""}" data-like="${esc(t.video_id)}" data-liked="${t.liked ? 1 : 0}" title="${t.liked ? "Прибрати лайк" : "Лайкнути в YouTube Music"}" aria-label="Лайк"><svg viewBox="0 0 24 24"><path d="M12 20.5s-7.5-4.6-9.3-9.2C1.5 8 3.6 4.5 7.1 4.5c2 0 3.6 1.1 4.9 2.9 1.3-1.8 2.9-2.9 4.9-2.9 3.5 0 5.6 3.5 4.4 6.8-1.8 4.6-9.3 9.2-9.3 9.2z"/></svg></button>
+       <button class="ib" data-again='${esc(JSON.stringify(t))}' title="Поставити в чергу ще раз">Ще раз</button>`)).join("")
       : `<li class="empty">Тут з'являться треки, що вже відіграли.</li>`;
     $("banned").innerHTML = (s.banned || []).length ? s.banned.map((b) =>
       `<li class="item" style="grid-template-columns:1fr auto"><div class="tt">${esc(b.label)}</div>
@@ -422,6 +436,17 @@
     if (!state || !state.now) return toast("Зараз нічого не грає");
     control(b.dataset.act).then(() => toast(b.dataset.act === "ban" ? "Трек заборонено" : "Пропущено"));
   });
+  $("likeBtn").onclick = async () => {
+    if (!state || !state.now) return toast("Зараз нічого не грає");
+    const want = !state.now.liked;
+    const btn = $("likeBtn");
+    btn.classList.toggle("on", want); btn.classList.add("pop");
+    setTimeout(() => btn.classList.remove("pop"), 400);
+    try {
+      await control("like", { video_id: state.now.video_id, like: want });
+      toast(want ? "Лайкнуто в YouTube Music ♥" : "Лайк прибрано");
+    } catch { btn.classList.toggle("on", !want); }
+  };
   $("vol").oninput = (e) => { volDrag = true; $("volv").textContent = e.target.value; };
   $("vol").onchange = (e) => { volDrag = false; control("volume", { value: +e.target.value }); };
   $("onair").onchange = (e) => control(e.target.checked ? "on" : "off").then(() => toast(e.target.checked ? "Музику увімкнено" : "Музику вимкнено"));
@@ -430,6 +455,12 @@
   document.body.addEventListener("click", async (e) => {
     const q = e.target.closest("[data-q]");
     if (q) return control(q.dataset.q === "next" ? "next" : "remove", { index: +q.dataset.i });
+    const lk = e.target.closest("[data-like]");
+    if (lk) {
+      const want = lk.dataset.liked !== "1";
+      try { await control("like", { video_id: lk.dataset.like, like: want }); toast(want ? "Лайкнуто в YouTube Music ♥" : "Лайк прибрано"); } catch {}
+      return;
+    }
     const un = e.target.closest("[data-unban]");
     if (un) { await control("unban", { video_id: un.dataset.unban }); return toast("Розбанено — фільтр його більше не чіпатиме"); }
     const again = e.target.closest("[data-again]");

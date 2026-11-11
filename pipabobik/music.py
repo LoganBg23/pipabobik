@@ -51,6 +51,10 @@ class Track:
         return cls(**known)
 
 
+class LoginRequired(Exception):
+    """Дія потребує входу в Google (cookies YouTube)."""
+
+
 class _YdlLogger:
     """Перенаправляє повідомлення yt-dlp у наш лог замість консолі."""
 
@@ -105,6 +109,8 @@ class MusicSource:
         # а розшифровка плеєра YouTube кешується в пам'яті — менше навантаження на кожен трек.
         self._ydl: dict[str, tuple[object, float]] = {}
         self._ydl_lock = threading.Lock()
+        self._ytm_auth = None  # YTMusic з вашим логіном — для лайків
+        self._ytm_auth_at = 0.0
 
     # ── ytmusicapi ──
     @property
@@ -175,6 +181,61 @@ class MusicSource:
 
     async def by_id(self, video_id: str) -> Track | None:
         return await asyncio.to_thread(self._by_id_sync, video_id)
+
+    # ── лайки у вашому акаунті YouTube Music ──
+    def _google_cookies(self) -> dict[str, str]:
+        if self._cookies_broken or not (self.cookies_from_browser or self.cookies_file):
+            return {}
+        try:
+            with self._ydl_lock:
+                jar = self._get_ydl("meta").cookiejar
+                return {c.name: c.value for c in jar if c.domain.endswith("youtube.com") and c.value}
+        except Exception as e:  # noqa: BLE001
+            log.warning("Не вдалося прочитати вхід Google: %s", str(e).splitlines()[0][:200])
+            return {}
+
+    def _authed_ytm(self):
+        if self._ytm_auth is None or time.time() - self._ytm_auth_at > 6 * 3600:
+            cookies = self._google_cookies()
+            if "__Secure-3PAPISID" not in cookies and "SAPISID" not in cookies:
+                raise LoginRequired("немає входу в Google")
+            cookies.setdefault("__Secure-3PAPISID", cookies.get("SAPISID", ""))
+            from ytmusicapi import YTMusic
+            from ytmusicapi.helpers import initialize_headers
+
+            headers = dict(initialize_headers())
+            headers.pop("accept-encoding", None)
+            headers.pop("content-encoding", None)
+            headers.update({
+                "cookie": "; ".join(f"{k}={v}" for k, v in cookies.items()),
+                "authorization": "SAPISIDHASH 0_0",  # ytmusicapi перераховує підпис на кожен запит
+                "x-goog-authuser": "0",
+                "origin": "https://music.youtube.com",
+                "x-origin": "https://music.youtube.com",
+            })
+            self._ytm_auth = YTMusic(auth=headers, language="en", location="UA")
+            self._ytm_auth_at = time.time()
+        return self._ytm_auth
+
+    def _rate_sync(self, video_id: str, like: bool) -> None:
+        rating = "LIKE" if like else "INDIFFERENT"
+        try:
+            from ytmusicapi.models.content.enums import LikeStatus
+
+            rating = LikeStatus.LIKE if like else LikeStatus.INDIFFERENT
+        except ImportError:
+            pass
+        self._authed_ytm().rate_song(video_id, rating)
+
+    async def rate(self, video_id: str, like: bool) -> None:
+        """Лайк (або зняти лайк) у вашому акаунті YouTube Music."""
+        try:
+            await asyncio.to_thread(self._rate_sync, video_id, like)
+        except LoginRequired:
+            raise
+        except Exception:
+            self._ytm_auth = None  # можливо, cookies застаріли — наступного разу перечитаємо
+            raise
 
     # ── yt-dlp ──
     def ydl_opts(self) -> dict:
