@@ -31,6 +31,9 @@ class Jukebox:
         self.history: deque[Track] = deque(maxlen=20)
         self.banned_ids: set[str] = set()
         self.banned_meta: dict[str, str] = {}
+        self.allowed_ids: set[str] = set()  # розбанені вручну — фільтр їх більше не чіпає
+        # async (track) -> причина або None; задається ботом (фільтр російської музики)
+        self.content_filter: Callable[[Track], Awaitable[str | None]] | None = None
         self.last_request: dict[str, float] = {}
         self._fallback: list[Track] = []
         self._fallback_loaded_at = 0.0
@@ -51,6 +54,10 @@ class Jukebox:
     def _ban_file(self) -> Path:
         return self.data_dir / "banned.json"
 
+    @property
+    def _allow_file(self) -> Path:
+        return self.data_dir / "allowed.json"
+
     def _load(self) -> None:
         try:
             if self._queue_file.exists():
@@ -64,6 +71,8 @@ class Jukebox:
                 else:  # старий формат — просто список id
                     self.banned_meta = {vid: vid for vid in data}
                 self.banned_ids = set(self.banned_meta)
+            if self._allow_file.exists():
+                self.allowed_ids = set(json.loads(self._allow_file.read_text(encoding="utf-8")))
         except (OSError, ValueError, TypeError) as e:
             log.warning("Не вдалося відновити дані: %s", e)
 
@@ -75,6 +84,7 @@ class Jukebox:
         self._queue_file.write_text(json.dumps([t.to_dict() for t in items], ensure_ascii=False), encoding="utf-8")
         meta = {vid: self.banned_meta.get(vid, vid) for vid in sorted(self.banned_ids)}
         self._ban_file.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+        self._allow_file.write_text(json.dumps(sorted(self.allowed_ids)), encoding="utf-8")
 
     def changed(self) -> None:
         for cb in list(self.listeners):
@@ -179,8 +189,26 @@ class Jukebox:
     def unban(self, video_id: str) -> None:
         self.banned_ids.discard(video_id)
         self.banned_meta.pop(video_id, None)
+        self.allowed_ids.add(video_id)
         self.save()
         self.changed()
+
+    def ban_track(self, track: Track, reason: str = "") -> None:
+        self.banned_ids.add(track.video_id)
+        self.banned_meta[track.video_id] = f"{track.label} · {reason}" if reason else track.label
+        self.queue = [t for t in self.queue if t.video_id != track.video_id]
+        self.save()
+        self.changed()
+
+    async def filter_reason(self, track: Track) -> str | None:
+        """Автофільтр (російська музика). Розбанені вручну треки пропускає."""
+        if not self.content_filter or track.video_id in self.allowed_ids:
+            return None
+        try:
+            return await self.content_filter(track)
+        except Exception:  # noqa: BLE001
+            log.exception("фільтр")
+            return None
 
     def reset_fallback(self) -> None:
         self._fallback = []
@@ -269,8 +297,14 @@ class Jukebox:
             self._fallback = await self.music.playlist(pl, bool(self.google.get("fallback_shuffle", True)))
         while self._fallback:
             t = self._fallback.pop(0)
-            if t.video_id not in self.banned_ids:
-                return t
+            if t.video_id in self.banned_ids:
+                continue
+            reason = await self.filter_reason(t)
+            if reason:
+                log.info("Фоновий плейлист: пропущено %s (%s)", t.label, reason)
+                self.ban_track(t, reason)
+                continue
+            return t
         return None
 
     # ── головний цикл ──

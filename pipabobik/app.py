@@ -15,8 +15,10 @@ from .config import DATA_DIR, Config
 from .jukebox import Jukebox
 from .music import MusicSource
 from .player import Player
+from .rufilter import RuFilter
 from .server import Server
 from .twitch import TwitchAuth, TwitchChat
+from .winproc import kill_children_with_me, kill_orphan_players
 
 log = logging.getLogger("pipabobik")
 
@@ -86,6 +88,12 @@ class Bot:
         log.info("Налаштування оновлено з панелі: %s", ", ".join(f"{s}.{k}" for s, kv in updates.items() for k in kv))
         self.jukebox.changed()
 
+    async def _ru_check(self, track) -> str | None:
+        if not self.cfg["rules"].get("block_russian", True):
+            return None
+        self.rufilter.extra = {a.lower() for a in self.cfg["rules"].get("russian_artists") or []}
+        return await self.rufilter.check(track.title, track.artist, track.album)
+
     def _detect_google_login(self) -> bool | None:
         g = self.cfg["google"]
         if not (g.get("cookies_from_browser") or g.get("cookies_file")):
@@ -108,7 +116,12 @@ class Bot:
         except OSError:
             log.info("pipabobik вже запущено (порт %s зайнятий) — виходжу", self.cfg.port)
             return 0
+        kill_children_with_me()  # mpv/Deno закриються разом із ботом, навіть при аварійному завершенні
+        if kill_orphan_players():
+            log.info("Закрито mpv, що залишився від попереднього запуску")
         self.session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=30))
+        self.rufilter = RuFilter(DATA_DIR / "artist_country.json", self.cfg["rules"].get("russian_artists"), self.session)
+        self.jukebox.content_filter = self._ru_check
         self.chat = TwitchChat(self.auth, self.session, self.cfg.channel)
         self.commands = Commands(self.cfg, self.jukebox, self.music, self.say)
         self.chat.handler = self.commands.handle
@@ -123,16 +136,18 @@ class Bot:
         if not self.cfg.channel or not self.auth.client_id:
             log.error("Заповніть [twitch] channel, client_id, client_secret у config.toml (або запустіть --setup)")
         elif not await self.auth.validate(self.session):
-            log.warning("Потрібно увійти в Twitch: відкриваю %s/auth", base)
-            webbrowser.open(f"{base}/auth")
+            if not self.auth.refresh_token:  # перший запуск — відкриваємо вхід; надалі лише підказка в панелі
+                log.warning("Потрібно увійти в Twitch: відкриваю %s/auth", base)
+                webbrowser.open(f"{base}/auth")
+            else:
+                log.warning("Не вдалося перевірити вхід Twitch — увійдіть заново: %s/auth", base)
 
         tasks = [
             asyncio.create_task(self.chat.run(), name="chat"),
             asyncio.create_task(self.jukebox.run(), name="jukebox"),
             asyncio.create_task(self._validate_loop(), name="validate"),
         ]
-        if self.obs_mode:
-            tasks.append(asyncio.create_task(self._watch_obs(), name="obs"))
+        tasks.append(asyncio.create_task(self._watch_obs(), name="obs"))
         if self.start_live or not (self.obs_mode or self.start_paused):
             self.jukebox.activate()
         asyncio.create_task(self._check_google())
@@ -140,8 +155,9 @@ class Bot:
             await self.shutdown.wait()
         finally:
             log.info("Завершення роботи…")
+            # спершу зупиняємо відтворення: поточний трек повертається на початок черги
+            await self.jukebox.deactivate()
             self.jukebox.save()
-            await self.player.stop()
             for t in tasks:
                 t.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
@@ -168,22 +184,33 @@ class Bot:
         await self.say(f"🎀 pipabobik на місці! Замовляй музику: {c('request')} назва · що грає: {c('now')}")
 
     async def _watch_obs(self) -> None:
-        """Стежить за файлом стану, який пише Lua-скрипт OBS, і за процесом OBS."""
+        """Стежить за OBS у будь-якому режимі запуску.
+
+        * файл data/obs_state пише Lua-скрипт: live / idle / exit;
+        * якщо OBS був відкритий і зник — бот зупиняє музику (черга зберігається) і закривається.
+        Бот, запущений без OBS (з ярлика), реагує лише на зміни після свого старту.
+        """
         state_file = DATA_DIR / "obs_state"
+        started = time.time()
         last = None
+        obs_seen = self.obs_mode
         missing = 0
         tick = 0
         while True:
             await asyncio.sleep(1)
             tick += 1
+            state = ""
             try:
-                state = state_file.read_text(encoding="utf-8").strip().split()[0] if state_file.exists() else ""
+                if state_file.exists() and (self.obs_mode or state_file.stat().st_mtime >= started - 1):
+                    state = state_file.read_text(encoding="utf-8").strip().split()[0]
             except (OSError, IndexError):
                 state = ""
             if state != last:
-                self.obs_live = state == "live"
-                self.jukebox.changed()
+                if state:
+                    self.obs_live = state == "live"
+                    self.jukebox.changed()
                 if state == "live":
+                    obs_seen = True
                     log.info("OBS: трансляцію розпочато")
                     self.jukebox.activate()
                     if self.cfg["chat"].get("greet_on_stream_start") and time.time() - self._greeted > 1800:
@@ -192,18 +219,19 @@ class Bot:
                 elif state == "idle" and last == "live":
                     log.info("OBS: трансляцію завершено — музику на паузу, черга збережена")
                     await self.jukebox.deactivate()
-                elif state == "exit":
-                    log.info("OBS закрито — бот теж закривається")
+                elif state == "exit" and last is not None:
+                    log.info("OBS закрито — зупиняю музику і закриваюсь")
                     self.shutdown.set()
                     return
                 last = state
-            if tick % 15 == 0:
-                if await asyncio.to_thread(self._obs_running):
-                    missing = 0
-                else:
+            if tick % 5 == 0:
+                running = await asyncio.to_thread(self._obs_running)
+                if running:
+                    obs_seen, missing = True, 0
+                elif obs_seen:
                     missing += 1
-                    if missing >= 3:
-                        log.info("Процес OBS не знайдено — бот закривається")
+                    if missing >= 2:
+                        log.info("OBS закрито — зупиняю музику і закриваюсь")
                         self.shutdown.set()
                         return
 

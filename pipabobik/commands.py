@@ -100,6 +100,11 @@ class Commands:
         for t in candidates[:5]:
             r = self.jb.check(t, m.user_id, priv)
             if r is None:
+                ru = await self.jb.filter_reason(t)
+                if ru:
+                    # не підсовуємо інший трек замість забороненого — просто відмовляємо
+                    self.jb.ban_track(t, ru)
+                    return await self.reply(m, f"{t.label} — {ru}. Російське тут не граємо 🇺🇦")
                 chosen = t
                 break
             first_reason = first_reason or r

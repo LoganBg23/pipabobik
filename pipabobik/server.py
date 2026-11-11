@@ -204,7 +204,11 @@ class Server:
             return web.json_response({"error": "bad track"}, status=400)
         jb = self.bot.jukebox
         if track.video_id in jb.banned_ids:
-            jb.unban(track.video_id)  # стрімер сам обрав — знімаємо бан
+            return web.json_response({"error": f"{track.label} у бан-листі. Розбаньте його у вкладці «Історія», якщо хочете зіграти."}, status=409)
+        reason = await jb.filter_reason(track)
+        if reason:
+            jb.ban_track(track, reason)
+            return web.json_response({"error": f"{track.label} — {reason}. Трек додано в бан-лист."}, status=409)
         mode = d.get("mode", "end")  # end | next | now
         who = self.bot.auth.login or self.bot.cfg.channel or "стрімер"
         jb.add(track, "panel", who, front=mode in ("next", "now"))
@@ -220,7 +224,7 @@ class Server:
         "rules": {
             "who_can_request": str, "max_duration": int, "max_per_user": int, "cooldown": int,
             "max_queue": int, "only_songs": bool, "block_explicit": bool, "interrupt_fallback": bool,
-            "banned_words": list,
+            "banned_words": list, "block_russian": bool, "russian_artists": list,
         },
         "chat": {"announce_tracks": bool, "greet_on_stream_start": bool},
         "player": {"normalize": bool},
@@ -253,7 +257,9 @@ class Server:
                     elif typ is int:
                         v = max(0, int(v))
                     elif typ is list:
-                        v = [str(x).strip().lower() for x in (v if isinstance(v, list) else str(v).split(",")) if str(x).strip()]
+                        v = [str(x).strip() for x in (v if isinstance(v, list) else str(v).split(",")) if str(x).strip()]
+                        if k == "banned_words":
+                            v = [x.lower() for x in v]
                     else:
                         v = str(v).strip()
                 except (TypeError, ValueError):

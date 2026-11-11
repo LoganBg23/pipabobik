@@ -35,6 +35,8 @@ DEFAULTS: dict = {
         "block_explicit": False,
         "banned_words": [],
         "interrupt_fallback": True,
+        "block_russian": True,
+        "russian_artists": [],
     },
     "commands": {
         "request": ["!трек", "!sr"],

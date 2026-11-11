@@ -31,6 +31,9 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
+echo   Вікно панелі (необов'язково)...
+.venv\Scripts\python.exe -m pip install -r requirements-panel.txt
+if errorlevel 1 echo   Не вдалося - панель відкриватиметься через Microsoft Edge, це нормально.
 
 echo [4/4] Ярлик панелі керування на робочому столі...
 call panel_shortcut.bat quiet

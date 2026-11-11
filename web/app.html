@@ -49,6 +49,7 @@
   .chip.ok i { background: var(--ok); }
   .chip.bad i { background: #ff6b8b; }
   .chip.live { background: var(--hot); color: #fff; }
+  a.chip { text-decoration: none; color: #ffd0dc; }
   .chip.live i { background: #fff; animation: pulse 1.6s ease-in-out infinite; }
   @keyframes pulse { 50% { opacity: .35; } }
 
@@ -244,6 +245,8 @@
         <div class="group">Що грає</div>
         <div class="field"><label for="only_songs">Лише пісні з YouTube Music<small>без кліпів, «10 годин…» і відео з балачками</small></label>
           <label class="switch"><input type="checkbox" id="only_songs" data-key="rules.only_songs"><span></span></label></div>
+        <div class="field"><label for="block_russian">Блокувати російську музику<small>російські виконавці та пісні російською — у бан автоматично</small></label>
+          <label class="switch"><input type="checkbox" id="block_russian" data-key="rules.block_russian"><span></span></label></div>
         <div class="field"><label for="block_explicit">Без треків Explicit</label>
           <label class="switch"><input type="checkbox" id="block_explicit" data-key="rules.block_explicit"><span></span></label></div>
         <div class="field"><label for="interrupt_fallback">Замовлення перебиває фонову музику</label>
@@ -274,7 +277,7 @@
 
 <footer>
   <button class="ghost" id="copyWidget" title="Скопіювати адресу віджета для OBS">Адреса віджета</button>
-  <button class="ghost danger" id="quitBtn">Закрити бота</button>
+  <button class="ghost danger" id="quitBtn">Вимкнути pipabobik</button>
 </footer>
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
@@ -296,7 +299,9 @@
   async function api(path, body, method = "POST") {
     const r = await fetch(path, { method, headers: { "Content-Type": "application/json", "X-Pipabobik-Key": key }, body: body ? JSON.stringify(body) : undefined });
     if (r.status === 403) { toast("Невірний ключ — відкрийте панель через ярлик pipabobik"); throw new Error("403"); }
-    return r.json();
+    const data = await r.json();
+    if (!r.ok) { toast(data.error || "Не вдалося"); throw new Error(data.error || r.status); }
+    return data;
   }
   const control = (action, extra = {}) => api("/api/control", { action, ...extra });
 
@@ -310,7 +315,9 @@
     const c = [];
     if (h.obs_live) c.push('<span class="chip live"><i></i>В ефірі</span>');
     else if (h.obs_live === false) c.push('<span class="chip"><i></i>Не в ефірі</span>');
-    c.push(`<span class="chip ${h.twitch && h.chat ? "ok" : "bad"}" title="${h.twitch ? "Бот: " + esc(h.twitch) : "Увійдіть у Twitch на localhost:17777"}"><i></i>Twitch</span>`);
+    c.push(h.twitch
+      ? `<span class="chip ${h.chat ? "ok" : "bad"}" title="Бот: ${esc(h.twitch)}"><i></i>Twitch</span>`
+      : `<a class="chip bad" href="/auth" target="_blank" title="Натисніть, щоб увійти в Twitch"><i></i>Увійти в Twitch</a>`);
     c.push(`<span class="chip ${h.mpv ? "ok" : "bad"}" title="${h.mpv ? "Програвач знайдено" : "mpv не знайдено"}"><i></i>Звук</span>`);
     if (h.google !== null && h.google !== undefined)
       c.push(`<span class="chip ${h.google ? "ok" : ""}" title="${h.google ? "Вхід у Google є" : "Без входу в Google"}"><i></i>Google</span>`);
@@ -424,14 +431,16 @@
     const q = e.target.closest("[data-q]");
     if (q) return control(q.dataset.q === "next" ? "next" : "remove", { index: +q.dataset.i });
     const un = e.target.closest("[data-unban]");
-    if (un) { await control("unban", { video_id: un.dataset.unban }); return toast("Розбанено"); }
+    if (un) { await control("unban", { video_id: un.dataset.unban }); return toast("Розбанено — фільтр його більше не чіпатиме"); }
     const again = e.target.closest("[data-again]");
-    if (again) { await api("/api/add", { track: JSON.parse(again.dataset.again), mode: "end" }); return toast("Додано в чергу"); }
+    if (again) { try { await api("/api/add", { track: JSON.parse(again.dataset.again), mode: "end" }); toast("Додано в чергу"); } catch {} return; }
     const add = e.target.closest("[data-add]");
     if (add) {
       const t = lastResults[+add.dataset.i];
-      await api("/api/add", { track: t, mode: add.dataset.add });
-      toast({ end: "Додано в чергу", next: "Заграє наступним", now: "Вмикаю" }[add.dataset.add]);
+      try {
+        await api("/api/add", { track: t, mode: add.dataset.add });
+        toast({ end: "Додано в чергу", next: "Заграє наступним", now: "Вмикаю" }[add.dataset.add]);
+      } catch {}
     }
   });
 
@@ -497,7 +506,7 @@
     const url = `${location.origin}/widget`;
     try { await navigator.clipboard.writeText(url); toast("Скопійовано: " + url); } catch { prompt("Адреса віджета для OBS:", url); }
   };
-  $("quitBtn").onclick = () => { if (confirm("Закрити бота? Музика зупиниться, черга збережеться.")) control("shutdown"); };
+  $("quitBtn").onclick = () => { if (confirm("Вимкнути pipabobik? Музика зупиниться, черга збережеться.")) control("shutdown"); };
 })();
 </script>
 </body>
