@@ -28,18 +28,17 @@ def find_mpv(configured: str = "mpv") -> str | None:
         return found
     candidates: list[Path] = []
     if IS_WIN:
-        for env in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA", "USERPROFILE"):
-            base = os.environ.get(env)
-            if not base:
-                continue
-            candidates += [
-                Path(base) / "mpv" / "mpv.exe",
-                Path(base) / "Programs" / "mpv" / "mpv.exe",
-                Path(base) / "scoop" / "shims" / "mpv.exe",
-            ]
+        bases = [os.environ.get(e) for e in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA", "USERPROFILE")]
+        for base in filter(None, bases):
+            b = Path(base)
+            candidates += [b / "mpv" / "mpv.exe", b / "scoop" / "shims" / "mpv.exe"]
+            # «MPV Player», «mpv.net», «Programs\mpv» тощо
+            candidates += sorted(b.glob("*mpv*/mpv.exe")) + sorted(b.glob("Programs/*mpv*/mpv.exe"))
         la = os.environ.get("LOCALAPPDATA")
-        if la:  # winget portable links
-            candidates.append(Path(la) / "Microsoft" / "WinGet" / "Links" / "mpv.exe")
+        if la:  # winget: посилання та розпаковані пакети
+            winget = Path(la) / "Microsoft" / "WinGet"
+            candidates.append(winget / "Links" / "mpv.exe")
+            candidates += sorted(winget.glob("Packages/*mpv*/**/mpv.exe"))
     else:
         candidates += [Path("/opt/homebrew/bin/mpv"), Path("/usr/local/bin/mpv"), Path("/usr/bin/mpv")]
     for c in candidates:

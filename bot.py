@@ -102,7 +102,9 @@ async def run_check() -> int:
     line(bool(cfg.channel), f"канал: {cfg.channel or '—'}")
     line(bool(cfg['twitch']['client_id'] and cfg['twitch']['client_secret']), "client_id / client_secret")
     p = Player(cfg["player"]["mpv_path"])
-    line(p.available, f"mpv: {p.mpv or 'не знайдено → winget install -e --id shinchiro.mpv'}")
+    line(p.available, f"mpv: {p.mpv or 'не знайдено → winget install -e --id shinchiro.mpv, потім перезапустіть вікно'}")
+    if not p.available:
+        print("     або знайдіть mpv.exe і впишіть у config.toml в одинарних лапках: mpv_path = 'C:\\шлях\\mpv.exe'")
     deno = shutil.which("deno")
     line(bool(deno), f"Deno (потрібен yt-dlp для YouTube): {deno or 'не знайдено → winget install -e --id DenoLand.Deno'}")
 
