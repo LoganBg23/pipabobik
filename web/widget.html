@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<title>pipabobik — зараз грає</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@600;800&family=Manrope:wght@500;700;800&display=swap" rel="stylesheet">
+<style>
+  /*
+    Параметри адреси:
+      ?idle=hide   — ховати віджет, коли нічого не грає (за замовчуванням)
+      ?idle=hint   — показувати підказку «замов трек»
+      ?cmd=!трек   — команда в підказці
+      ?scale=1.25  — масштаб
+      ?demo=1      — демо-трек (для налаштування в OBS без бота)
+  */
+  :root {
+    --hot: #ff3d9a;        /* гарячий рожевий — головний акцент */
+    --blush: #ffb3d6;      /* ніжний рожевий */
+    --pearl: #fff0f7;      /* перламутр — основа картки */
+    --plum: #3a0d2c;       /* темна слива — текст і платівка */
+    --lilac: #c58bff;      /* бузковий — відблиск */
+    --scale: 1;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { background: transparent; overflow: hidden; }
+  body { font-family: "Manrope", system-ui, sans-serif; color: var(--plum); padding: 28px 22px; }
+
+  .stage {
+    width: 600px;
+    transform: scale(var(--scale));
+    transform-origin: top left;
+    transition: opacity .5s ease, transform .5s ease;
+  }
+  .stage.hidden { opacity: 0; transform: scale(var(--scale)) translateY(14px); }
+
+  /* ── картка ── */
+  .card {
+    position: relative;
+    display: grid;
+    grid-template-columns: 218px 1fr;
+    align-items: center;
+    height: 148px;
+    padding: 0 26px 0 18px;
+    border-radius: 34px 34px 34px 10px;
+    background:
+      radial-gradient(120% 140% at 0% 0%, #ffffff 0%, transparent 46%),
+      radial-gradient(90% 120% at 100% 100%, #ffc7e3 0%, transparent 60%),
+      linear-gradient(118deg, var(--pearl) 0%, #ffd9ec 52%, #ffc1df 100%);
+    border: 2px solid rgba(255, 255, 255, .85);
+    box-shadow:
+      0 18px 40px -16px rgba(255, 61, 154, .55),
+      0 2px 0 rgba(255, 255, 255, .9) inset,
+      0 -10px 24px -14px rgba(255, 61, 154, .35) inset;
+  }
+  /* зерно — щоб градієнт не був «пластиковим» */
+  .card::after {
+    content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+    opacity: .18; mix-blend-mode: multiply;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .9  0 0 0 0 .3  0 0 0 0 .6  0 0 0 .55 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  }
+
+  /* ── конверт + платівка ── */
+  .deck { position: relative; width: 200px; height: 118px; }
+  .sleeve {
+    position: absolute; left: 0; top: 0; z-index: 2;
+    width: 118px; height: 118px; border-radius: 16px;
+    background: var(--blush) center / cover no-repeat;
+    box-shadow: 0 10px 22px -10px rgba(58, 13, 44, .55), 0 0 0 2px #fff;
+  }
+  .vinyl {
+    position: absolute; z-index: 1; top: 2px; left: 84px;
+    width: 114px; height: 114px; border-radius: 50%;
+    transition: left .7s cubic-bezier(.65, 0, .35, 1);
+  }
+  .deck.swap .vinyl { left: 6px; }
+  .grooves {
+    position: absolute; inset: 0; border-radius: 50%;
+    background:
+      radial-gradient(circle, transparent 0 31%, rgba(255,255,255,.06) 31.5% 32.5%, transparent 33%),
+      repeating-radial-gradient(circle, #2a0920 0 1.2px, #43102f 1.6px 2.6px);
+    box-shadow: 0 6px 16px -6px rgba(58, 13, 44, .7);
+    animation: spin 2.6s linear infinite;
+  }
+  .label {
+    position: absolute; inset: 31%; border-radius: 50%;
+    background: var(--hot) center / cover no-repeat;
+    box-shadow: 0 0 0 2px #2a0920;
+  }
+  .label::after { /* отвір */
+    content: ""; position: absolute; inset: 44%; border-radius: 50%; background: #ffd9ec;
+  }
+  /* відблиск світла не крутиться разом з платівкою — як у житті */
+  .sheen {
+    position: absolute; inset: 0; border-radius: 50%; pointer-events: none;
+    background: conic-gradient(from 30deg, transparent 0 10%, rgba(255,255,255,.22) 14%, transparent 20% 52%, rgba(197,139,255,.28) 58%, transparent 64%);
+    mix-blend-mode: screen;
+  }
+  .paused .grooves { animation-play-state: paused; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── текст ── */
+  .meta { min-width: 0; display: grid; gap: 6px; }
+  .title-wrap { overflow: hidden; white-space: nowrap; mask-image: linear-gradient(90deg, #000 88%, transparent); }
+  .title-wrap.fits { mask-image: none; }
+  .title {
+    display: inline-block;
+    font-family: "Unbounded", "Manrope", sans-serif;
+    font-weight: 800; font-size: 23px; line-height: 1.15; letter-spacing: -.01em;
+    color: var(--plum);
+  }
+  .title.scroll { animation: marquee var(--dur, 12s) linear infinite; padding-right: 60px; }
+  @keyframes marquee { 0%, 12% { transform: translateX(0); } 88%, 100% { transform: translateX(var(--shift)); } }
+  .artist {
+    font-weight: 700; font-size: 15px; color: #8a2f68;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .progress { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 10px; margin-top: 6px; }
+  .time { font-size: 12px; font-weight: 800; font-variant-numeric: tabular-nums; color: #a0457d; }
+  .bar { height: 6px; border-radius: 6px; background: rgba(58, 13, 44, .12); overflow: hidden; }
+  .fill {
+    height: 100%; width: 0; border-radius: inherit;
+    background: linear-gradient(90deg, var(--hot), #ff7ab9 70%, var(--lilac));
+    transition: width .25s linear;
+  }
+
+  /* ── наліпка із замовником ── */
+  .sticker {
+    position: absolute; right: 18px; top: -16px;
+    padding: 6px 13px 7px; border-radius: 999px;
+    background: var(--hot); color: #fff;
+    font-weight: 800; font-size: 13px; white-space: nowrap; max-width: 260px; overflow: hidden; text-overflow: ellipsis;
+    transform: rotate(3deg);
+    box-shadow: 0 6px 14px -6px rgba(255, 61, 154, .9), 0 0 0 2px #fff;
+    transition: opacity .3s;
+  }
+  .sticker.plain { background: var(--plum); box-shadow: 0 6px 14px -6px rgba(58,13,44,.8), 0 0 0 2px #fff; }
+  .sticker:empty { opacity: 0; }
+
+  /* підказка, коли тиша */
+  .hint .deck .sleeve { background: linear-gradient(135deg, var(--hot), var(--lilac)); }
+  .hint .time, .hint .bar { visibility: hidden; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .grooves, .title.scroll { animation: none; }
+    .vinyl { transition: none; }
+  }
+</style>
+</head>
+<body>
+<div class="stage hidden" id="stage">
+  <div class="card" id="card">
+    <div class="deck" id="deck">
+      <div class="vinyl">
+        <div class="grooves"><div class="label" id="label"></div></div>
+        <div class="sheen"></div>
+      </div>
+      <div class="sleeve" id="sleeve"></div>
+    </div>
+    <div class="meta">
+      <div class="title-wrap" id="titleWrap"><span class="title" id="title"></span></div>
+      <div class="artist" id="artist"></div>
+      <div class="progress">
+        <span class="time" id="cur">0:00</span>
+        <div class="bar"><div class="fill" id="fill"></div></div>
+        <span class="time" id="dur">0:00</span>
+      </div>
+    </div>
+    <div class="sticker" id="sticker"></div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const qs = new URLSearchParams(location.search);
+  const idleMode = qs.get("idle") || "hide";
+  const cmd = qs.get("cmd") || "!трек";
+  document.documentElement.style.setProperty("--scale", qs.get("scale") || 1);
+
+  const $ = (id) => document.getElementById(id);
+  const stage = $("stage"), card = $("card"), deck = $("deck");
+  let state = null, receivedAt = 0, currentId = null;
+
+  const fmt = (s) => { s = Math.max(0, Math.floor(s || 0)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
+
+  function fitTitle() {
+    const wrap = $("titleWrap"), t = $("title");
+    t.classList.remove("scroll");
+    t.style.removeProperty("--shift");
+    const overflow = t.scrollWidth - wrap.clientWidth;
+    wrap.classList.toggle("fits", overflow <= 0);
+    if (overflow > 0) {
+      t.style.setProperty("--shift", `-${overflow + 24}px`);
+      t.style.setProperty("--dur", `${Math.max(8, overflow / 18 + 6)}s`);
+      t.classList.add("scroll");
+    }
+  }
+
+  function setCover(url) {
+    const v = url ? `url("${url.replace(/"/g, "%22")}")` : "";
+    $("sleeve").style.backgroundImage = v;
+    $("label").style.backgroundImage = v;
+  }
+
+  function fillTrack(now) {
+    $("title").textContent = now.title;
+    $("artist").textContent = now.artist || "";
+    $("dur").textContent = now.duration ? fmt(now.duration) : "";
+    const st = $("sticker");
+    if (now.source === "request" && now.requested_by) {
+      st.textContent = `замовив(ла) @${now.requested_by}`;
+      st.classList.remove("plain");
+    } else {
+      st.textContent = "з плейлиста стрімера";
+      st.classList.add("plain");
+    }
+    setCover(now.cover);
+    requestAnimationFrame(fitTitle);
+  }
+
+  function render() {
+    const now = state && state.now;
+    const live = state && (state.status === "playing" || state.status === "paused" || state.status === "loading");
+    card.classList.toggle("paused", !state || state.status !== "playing");
+
+    if (now && live) {
+      card.classList.remove("hint");
+      stage.classList.remove("hidden");
+      if (now.video_id !== currentId) {
+        const first = currentId === null;
+        currentId = now.video_id;
+        if (first) { fillTrack(now); }
+        else {
+          // платівка ховається в конверт, змінюється, виїжджає назад
+          deck.classList.add("swap");
+          setTimeout(() => { fillTrack(now); deck.classList.remove("swap"); }, 650);
+        }
+      }
+      return;
+    }
+    currentId = null;
+    if (idleMode === "hint" && state && state.active) {
+      card.classList.add("hint");
+      stage.classList.remove("hidden");
+      setCover("");
+      $("title").textContent = "Замов трек!";
+      $("artist").textContent = `${cmd} виконавець — назва`;
+      $("sticker").textContent = "";
+      requestAnimationFrame(fitTitle);
+    } else {
+      stage.classList.add("hidden");
+    }
+  }
+
+  function tick() {
+    const now = state && state.now;
+    if (now && state.status !== "loading") {
+      let el = now.elapsed || 0;
+      if (state.status === "playing") el += (performance.now() - receivedAt) / 1000;
+      if (now.duration) el = Math.min(el, now.duration);
+      $("cur").textContent = fmt(el);
+      $("fill").style.width = now.duration ? `${(el / now.duration) * 100}%` : "0%";
+    } else if (now) {
+      $("cur").textContent = "0:00"; $("fill").style.width = "0%";
+    }
+  }
+
+  function apply(s) { state = s; receivedAt = performance.now(); render(); tick(); }
+
+  if (qs.get("demo")) {
+    apply({ status: "playing", active: true, now: {
+      video_id: "demo", title: qs.get("title") || "Обійми", artist: qs.get("artist") || "Океан Ельзи",
+      duration: 236, elapsed: 71, source: "request", requested_by: qs.get("user") || "pipa_fan",
+      cover: qs.get("cover") || "" } });
+  } else {
+    const connect = () => {
+      const es = new EventSource("/api/events");
+      es.onmessage = (e) => apply(JSON.parse(e.data));
+      es.onerror = () => { es.close(); setTimeout(connect, 3000); };
+    };
+    connect();
+  }
+  setInterval(tick, 250);
+  window.addEventListener("resize", fitTitle);
+})();
+</script>
+</body>
+</html>

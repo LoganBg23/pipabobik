@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<title>pipabobik — панель</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@700&family=Manrope:wght@500;700;800&display=swap" rel="stylesheet">
+<style>
+  :root { --hot:#ff3d9a; --blush:#ffb3d6; --plum:#2a0920; --plum2:#3a1430; --line:#4d1d40; --text:#fbe7f2; --muted:#c99ab7; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:"Manrope",system-ui,sans-serif; background:var(--plum); color:var(--text); padding:14px; font-size:14px; }
+  h1 { font-family:"Unbounded",sans-serif; font-size:15px; color:var(--blush); display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; }
+  .pill { font-family:inherit; font-size:12px; font-weight:800; padding:3px 10px; border-radius:999px; background:var(--plum2); color:var(--muted); }
+  .pill.on { background:var(--hot); color:#fff; }
+  .now { display:grid; grid-template-columns:56px 1fr; gap:12px; align-items:center; background:var(--plum2); border-radius:16px; padding:10px; }
+  .cover { width:56px; height:56px; border-radius:12px; background:var(--line) center/cover; }
+  .t { font-weight:800; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .a { color:var(--muted); font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .row { display:flex; gap:8px; margin:12px 0; flex-wrap:wrap; }
+  button { font:inherit; font-weight:800; border:0; border-radius:12px; padding:9px 12px; cursor:pointer; background:var(--plum2); color:var(--text); }
+  button:hover { background:var(--line); }
+  button:focus-visible, input:focus-visible { outline:2px solid var(--blush); outline-offset:2px; }
+  button.main { background:var(--hot); color:#fff; flex:1; }
+  .vol { display:flex; align-items:center; gap:10px; margin-bottom:14px; color:var(--muted); }
+  .vol input { flex:1; accent-color:var(--hot); }
+  h2 { font-size:13px; color:var(--muted); font-weight:700; margin:6px 0 8px; }
+  ol { list-style:none; display:grid; gap:6px; }
+  li { display:grid; grid-template-columns:22px 1fr auto auto; gap:6px; align-items:center; background:var(--plum2); border-radius:12px; padding:7px 8px; }
+  li .n { color:var(--muted); font-weight:800; text-align:center; }
+  li button { padding:5px 8px; font-size:12px; }
+  .empty { color:var(--muted); padding:10px 2px; }
+  .err { background:#5c1027; color:#ffd0dc; padding:10px; border-radius:12px; margin-bottom:10px; display:none; }
+</style>
+</head>
+<body>
+<div class="err" id="err"></div>
+<h1>🎀 pipabobik <span class="pill" id="status">…</span></h1>
+<div class="now">
+  <div class="cover" id="cover"></div>
+  <div style="min-width:0"><div class="t" id="title">Нічого не грає</div><div class="a" id="artist"></div></div>
+</div>
+<div class="row">
+  <button class="main" data-a="skip">Пропустити</button>
+  <button data-a="pause" id="pauseBtn">Пауза</button>
+  <button data-a="ban" title="Заборонити цей трек на каналі й пропустити">Забанити трек</button>
+</div>
+<div class="row" style="margin-top:-4px">
+  <button data-a="on" id="onBtn">Увімкнути музику</button>
+  <button data-a="off" id="offBtn">Вимкнути музику</button>
+</div>
+<label class="vol">Гучність <input type="range" min="0" max="100" id="vol"> <b id="volv"></b></label>
+<h2 id="qh">Черга</h2>
+<ol id="queue"></ol>
+<script>
+(() => {
+  const key = new URLSearchParams(location.search).get("key") || "";
+  const $ = (id) => document.getElementById(id);
+  const labels = { playing:"грає", paused:"пауза", idle:"тиша", loading:"завантаження", offline:"вимкнено" };
+  let dragging = false;
+
+  async function control(action, extra = {}) {
+    const r = await fetch("/api/control", { method:"POST", headers:{ "Content-Type":"application/json", "X-Pipabobik-Key":key }, body:JSON.stringify({ action, ...extra }) });
+    if (r.status === 403) { $("err").textContent = "Невірний ключ панелі. Скопіюйте адресу панелі з консолі бота або з http://localhost:17777"; $("err").style.display = "block"; }
+  }
+  document.querySelectorAll("button[data-a]").forEach(b => b.onclick = () => control(b.dataset.a));
+  const vol = $("vol");
+  vol.oninput = () => { dragging = true; $("volv").textContent = vol.value; };
+  vol.onchange = () => { dragging = false; control("volume", { value:+vol.value }); };
+
+  function esc(s) { return String(s ?? "").replace(/[&<>"]/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c])); }
+
+  function render(s) {
+    $("status").textContent = labels[s.status] || s.status;
+    $("status").classList.toggle("on", s.status === "playing");
+    const n = s.now;
+    $("title").textContent = n ? n.title : "Нічого не грає";
+    $("artist").textContent = n ? `${n.artist || ""}${n.source === "request" ? " · від @" + n.requested_by : " · фоновий плейлист"}` : "";
+    $("cover").style.backgroundImage = n && n.cover ? `url("${n.cover}")` : "";
+    $("pauseBtn").textContent = s.status === "paused" ? "Продовжити" : "Пауза";
+    $("onBtn").style.display = s.active ? "none" : "";
+    $("offBtn").style.display = s.active ? "" : "none";
+    if (!dragging) { vol.value = s.volume; $("volv").textContent = s.volume; }
+    $("qh").textContent = `Черга (${s.queue_len})`;
+    $("queue").innerHTML = s.queue.length ? s.queue.map((t, i) => `
+      <li><span class="n">${i + 1}</span>
+        <div style="min-width:0"><div class="t">${esc(t.title)}</div><div class="a">${esc(t.artist)} · @${esc(t.requested_by)}</div></div>
+        <button data-up="${i}" title="Вище" aria-label="Підняти вище" ${i === 0 ? "disabled" : ""}>↑</button>
+        <button data-rm="${i}" title="Прибрати" aria-label="Прибрати з черги">✕</button></li>`).join("")
+      : `<div class="empty">Черга порожня. Глядачі замовляють командою в чаті.</div>`;
+    document.querySelectorAll("[data-rm]").forEach(b => b.onclick = () => control("remove", { index:+b.dataset.rm }));
+    document.querySelectorAll("[data-up]").forEach(b => b.onclick = () => control("up", { index:+b.dataset.up }));
+  }
+
+  const connect = () => {
+    const es = new EventSource("/api/events");
+    es.onmessage = (e) => render(JSON.parse(e.data));
+    es.onerror = () => { es.close(); $("status").textContent = "бот не запущено"; setTimeout(connect, 3000); };
+  };
+  connect();
+})();
+</script>
+</body>
+</html>

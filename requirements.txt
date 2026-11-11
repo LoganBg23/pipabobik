@@ -1,0 +1,5 @@
+aiohttp>=3.9
+ytmusicapi>=1.8
+yt-dlp[default]>=2026.10.0
+psutil>=5.9
+tomli>=2.0; python_version < "3.11"

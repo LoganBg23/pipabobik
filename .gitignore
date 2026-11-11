@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.pyc
+config.toml
+data/
+cookies.txt
+*.log
+.pytest_cache/
