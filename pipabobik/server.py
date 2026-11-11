@@ -141,6 +141,9 @@ class Server:
             jb.activate()
         elif action == "off":
             await jb.deactivate()
+        elif action == "shutdown":
+            asyncio.get_running_loop().call_later(0.3, self.bot.shutdown.set)
+            return web.json_response({"ok": True})
         else:
             return web.json_response({"error": "unknown action"}, status=400)
         return web.json_response(jb.state())

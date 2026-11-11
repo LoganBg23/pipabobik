@@ -41,6 +41,7 @@ local function write_state(state)
 end
 
 local function launch(live)
+	write_state(live and "live" or "idle") -- прибрати можливий «exit» від кнопки «Зупинити»
 	if bot_dir == "" then
 		obs.script_log(obs.LOG_WARNING, "pipabobik: вкажіть папку бота в налаштуваннях скрипта")
 		return
@@ -92,7 +93,13 @@ function script_properties()
 	obs.obs_property_list_add_string(list, "Разом з OBS (музика — з початком трансляції)", "obs")
 	obs.obs_property_list_add_string(list, "Разом з трансляцією", "stream")
 	obs.obs_properties_add_button(p, "launch_now", "Запустити бота зараз", function()
-		launch(false)
+		launch(obs.obs_frontend_streaming_active())
+		return false
+	end)
+	obs.obs_properties_add_button(p, "stop_now", "Зупинити бота", function()
+		write_state("exit")
+		launched = false
+		obs.script_log(obs.LOG_INFO, "pipabobik: бот зупиняється")
 		return false
 	end)
 	return p
