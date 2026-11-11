@@ -35,6 +35,9 @@ volume = 60
 normalize = true
 # Пристрій виводу (порожньо = системний). Список: mpv --audio-device=help
 audio_device = ""
+# Windows: mpv відкривається згорнутим вікном «pipabobik» —
+# інакше OBS «Захоплення звуку програми» не бачить його у списку
+show_window = true
 
 [rules]
 # Хто може замовляти: "all" | "subs" | "vip" | "mods"

@@ -48,8 +48,12 @@ def find_mpv(configured: str = "mpv") -> str | None:
 
 
 class Player:
-    def __init__(self, mpv_path: str, volume: int = 60, normalize: bool = True, audio_device: str = ""):
+    def __init__(self, mpv_path: str, volume: int = 60, normalize: bool = True, audio_device: str = "",
+                 show_window: bool = True):
         self.mpv = find_mpv(mpv_path)
+        # OBS «Захоплення звуку програми» бачить лише програми з вікном,
+        # тому на Windows mpv відкривається згорнутим вікном «pipabobik».
+        self.show_window = show_window and IS_WIN
         self.volume = max(0, min(100, int(volume)))
         self.normalize = normalize
         self.audio_device = audio_device
@@ -78,7 +82,8 @@ class Player:
             self.mpv,
             "--no-video",
             "--no-terminal",
-            "--force-window=no",
+            *(["--force-window=yes", "--window-minimized=yes", "--geometry=320x80"] if self.show_window
+              else ["--force-window=no"]),
             "--audio-display=no",
             "--idle=no",
             "--title=pipabobik",

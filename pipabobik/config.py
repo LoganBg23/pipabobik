@@ -24,7 +24,7 @@ DEFAULTS: dict = {
         "fallback_playlist": "LM",
         "fallback_shuffle": True,
     },
-    "player": {"mpv_path": "mpv", "volume": 60, "normalize": True, "audio_device": ""},
+    "player": {"mpv_path": "mpv", "volume": 60, "normalize": True, "audio_device": "", "show_window": True},
     "rules": {
         "who_can_request": "all",
         "max_duration": 420,

@@ -55,7 +55,7 @@ class Bot:
         g = cfg["google"]
         self.music = MusicSource(g["cookies_from_browser"], g["cookies_file"])
         p = cfg["player"]
-        self.player = Player(p["mpv_path"], p["volume"], p["normalize"], p["audio_device"])
+        self.player = Player(p["mpv_path"], p["volume"], p["normalize"], p["audio_device"], p["show_window"])
         self.jukebox = Jukebox(cfg["rules"], g, self.music, self.player, DATA_DIR)
         self.jukebox.announce = bool(cfg["chat"].get("announce_tracks"))
         self.server = Server(self, cfg.port, DATA_DIR)
