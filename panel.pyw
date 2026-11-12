@@ -179,6 +179,14 @@ def set_window_icon() -> None:
         pass
 
 
+def restarting() -> bool:
+    """Бот перезапускається кнопкою в застосунку — тоді його коротка відсутність нормальна."""
+    try:
+        return time.time() - (DATA_DIR / "restarting").stat().st_mtime < 60
+    except OSError:
+        return False
+
+
 # ── стеження: закрити панель разом з OBS / ботом ──
 def watch(port: int, close, stop: threading.Event) -> None:
     obs_seen = obs_running()
@@ -193,7 +201,7 @@ def watch(port: int, close, stop: threading.Event) -> None:
             return
         if bot_running(port):
             bot_seen, bot_missing = True, 0
-        elif bot_seen:
+        elif bot_seen and not restarting():
             bot_missing += 1
             if bot_missing >= 2:  # бота закрили (кнопкою в панелі, з OBS-скрипта тощо)
                 log("бот зупинився — закриваю панель")

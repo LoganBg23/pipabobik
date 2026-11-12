@@ -189,3 +189,53 @@ async def test_control_seek(tmp_path, monkeypatch):
         assert (await client.post("/api/control", json={"action": "seek", "position": "x"}, headers=H)).status == 400
     finally:
         await client.close()
+
+
+@pytest.mark.asyncio
+async def test_panel_skip_is_addressed_to_one_track(tmp_path, monkeypatch):
+    from pipabobik.music import Track
+
+    monkeypatch.setattr("pipabobik.app.DATA_DIR", tmp_path)
+    bot = Bot(load_config(tmp_path / "none.toml"))
+    bot.server.key = "k"
+    H = {"X-Pipabobik-Key": "k"}
+    skipped = []
+
+    async def fake_stop():
+        skipped.append(bot.jukebox.now.video_id)
+
+    bot.player.stop = fake_stop
+    client = TestClient(TestServer(bot.server.app))
+    await client.start_server()
+    try:
+        bot.jukebox.now = Track("aaaaaaaaaaa", "Перша", "X", duration=200)
+        r = await (await client.post("/api/control", json={"action": "skip", "video_id": "aaaaaaaaaaa"}, headers=H)).json()
+        assert not r.get("ignored") and skipped == ["aaaaaaaaaaa"]
+        bot.jukebox.now = Track("bbbbbbbbbbb", "Друга", "X", duration=200)
+        # друге натискання ще про першу пісню — другу не чіпаємо
+        r = await (await client.post("/api/control", json={"action": "skip", "video_id": "aaaaaaaaaaa"}, headers=H)).json()
+        assert r["ignored"] and skipped == ["aaaaaaaaaaa"]
+        # док OBS без адресата: повтор одразу після скіпу теж ігнорується
+        r = await (await client.post("/api/control", json={"action": "skip"}, headers=H)).json()
+        assert r["ignored"] and skipped == ["aaaaaaaaaaa"]
+        assert "boot" in r
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_restart_action(tmp_path, monkeypatch):
+    monkeypatch.setattr("pipabobik.app.DATA_DIR", tmp_path)
+    bot = Bot(load_config(tmp_path / "none.toml"))
+    bot.server.key = "k"
+    called = []
+    bot.restart = lambda: called.append(True)
+    client = TestClient(TestServer(bot.server.app))
+    await client.start_server()
+    try:
+        r = await client.post("/api/control", json={"action": "restart"}, headers={"X-Pipabobik-Key": "k"})
+        assert r.status == 200
+        await asyncio.sleep(0.4)
+        assert called == [True]
+    finally:
+        await client.close()

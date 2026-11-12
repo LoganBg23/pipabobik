@@ -13,6 +13,8 @@ from .music import MusicSource, Track, fmt_time
 from .player import Player
 
 RESUME_ATTEMPTS = 2  # скільки разів продовжувати трек, який YouTube обірвав посередині
+SKIP_GUARD = 3.0  # с: повторний «скіп» без адресата одразу після попереднього не чіпає наступний трек
+STREAM_TTL = 20 * 60  # с: скільки тримати наперед отримане посилання на аудіо
 
 log = logging.getLogger("pipabobik.jukebox")
 
@@ -44,6 +46,11 @@ class Jukebox:
         self._activated = asyncio.Event()
         # який саме трек треба пропустити: так запізнілий «скіп» не зачепить наступний трек
         self._skip_target: Track | None = None
+        self._last_skip_at = 0.0
+        # наперед отримані посилання на аудіо: після скіпу наступний трек вмикається одразу
+        self._streams: dict[str, tuple[tuple[str, dict], float]] = {}
+        self._stream_tasks: dict[str, asyncio.Task] = {}
+        self._prefetch_task: asyncio.Task | None = None
         self.listeners: list[Callable[[], None]] = []
         self.say: Notify | None = None
         self.announce = False
@@ -156,6 +163,8 @@ class Jukebox:
         if self.now and self.now.source == "fallback" and self.rules.get("interrupt_fallback", True):
             asyncio.create_task(self.skip("замовлення перебиває фонову музику", only=self.now))
         self._wake.set()
+        if pos == 1 and self.now:
+            self.prefetch()  # цей трек наступний — готуємо його заздалегідь
         self.save()
         self.changed()
         return pos
@@ -231,15 +240,79 @@ class Jukebox:
 
     # ── керування ──
     async def skip(self, reason: str = "", only: Track | None = None) -> Track | None:
-        """Пропускає поточний трек. only — пропустити лише якщо зараз грає саме він."""
+        """Пропускає поточний трек. only — пропустити лише якщо зараз грає саме він.
+
+        Без only (команда в чаті) повторний скіп протягом SKIP_GUARD секунд ігнорується:
+        інакше два «!скіп» поспіль чи подвійне натискання пропускають і наступний трек.
+        """
         cur = self.now
         if only is not None and cur is not only:
             return None  # поки чекали, заграв інший трек — його не чіпаємо
-        if cur:
-            log.info("⏭ Пропущено %s — %s", cur.label, reason or "без причини")
+        if cur is None:
+            return None
+        if only is None and time.monotonic() - self._last_skip_at < SKIP_GUARD:
+            log.info("Повторний пропуск одразу після попереднього — ігнорую (%s)", reason or "без причини")
+            return None
+        log.info("⏭ Пропущено %s — %s", cur.label, reason or "без причини")
+        self._last_skip_at = time.monotonic()
         self._skip_target = cur
         await self.player.stop()
         return cur
+
+    def recently_skipped(self) -> bool:
+        return time.monotonic() - self._last_skip_at < SKIP_GUARD
+
+    # ── посилання на аудіо (з попереднім отриманням) ──
+    def _stream_task(self, track: Track) -> asyncio.Task:
+        vid = track.video_id
+        task = self._stream_tasks.get(vid)
+        if task is None:
+            task = asyncio.create_task(self.music.resolve_stream(track))
+            self._stream_tasks[vid] = task
+
+            def done(t: asyncio.Task, vid=vid) -> None:
+                self._stream_tasks.pop(vid, None)
+                if not t.cancelled() and t.exception() is None and t.result():
+                    self._streams[vid] = (t.result(), time.time())
+
+            task.add_done_callback(done)
+        return task
+
+    async def _resolve(self, track: Track):
+        """Посилання на аудіо: готове з кешу, те, що вже отримується, або нове."""
+        hit = self._streams.pop(track.video_id, None)
+        if hit and time.time() - hit[1] < STREAM_TTL:
+            return hit[0]
+        return await asyncio.shield(self._stream_task(track))
+
+    def prefetch(self) -> None:
+        """У фоні готує наступний трек, щоб після скіпу чи кінця треку не чекати."""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        if self._prefetch_task and not self._prefetch_task.done():
+            self._prefetch_task.cancel()
+        self._prefetch_task = asyncio.create_task(self._prefetch())
+
+    async def _prefetch(self) -> None:
+        try:
+            await asyncio.sleep(0.5)  # даємо поточному треку спокійно стартувати
+            if self.queue:
+                nxt = self.queue[0]
+            else:
+                nxt = await self._next_fallback()
+                if nxt is None:
+                    return
+                self._fallback.insert(0, nxt)
+            for vid in [v for v, (_, at) in self._streams.items() if time.time() - at > STREAM_TTL]:
+                self._streams.pop(vid, None)
+            if nxt.video_id not in self._streams:
+                await asyncio.shield(self._stream_task(nxt))
+        except asyncio.CancelledError:
+            pass
+        except Exception:  # noqa: BLE001
+            log.debug("prefetch", exc_info=True)
 
     async def ban_current(self) -> Track | None:
         cur = self.now
@@ -377,7 +450,7 @@ class Jukebox:
         self.now, self.loading = track, True
         self.changed()
         try:
-            res = await self.music.resolve_stream(track)
+            res = await self._resolve(track)
         finally:
             self.loading = False
         if not self.active or self._skip_target is track:
@@ -397,6 +470,7 @@ class Jukebox:
             who = f" · замовив(ла) @{track.requested_by}" if track.source == "request" else ""
             await self.say(f"🎶 Грає {track.label}{who}")
         log.info("▶ %s [%s]", track.label, track.source)
+        self.prefetch()
         url, headers = res
         start = 0.0
         for attempt in range(1 + RESUME_ATTEMPTS):

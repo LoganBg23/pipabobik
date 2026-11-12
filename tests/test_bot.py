@@ -305,7 +305,8 @@ async def test_request_aliases(cfg, tmp_path, cmd):
 
 
 @pytest.mark.asyncio
-async def test_old_skip_command_is_gone(cfg, tmp_path):
+async def test_old_skip_command_is_gone(cfg, tmp_path, monkeypatch):
+    monkeypatch.setattr("pipabobik.jukebox.SKIP_GUARD", 0)
     jb = Jukebox(cfg["rules"], cfg["google"], FakeMusic(), FakePlayer(), tmp_path)
     jb.now = T("x")
     out = []
@@ -396,7 +397,8 @@ def test_roles_and_most_generous_limits(cfg):
 
 
 @pytest.mark.asyncio
-async def test_permissions_per_role(cfg, tmp_path):
+async def test_permissions_per_role(cfg, tmp_path, monkeypatch):
+    monkeypatch.setattr("pipabobik.jukebox.SKIP_GUARD", 0)
     jb = Jukebox(cfg["rules"], cfg["google"], FakeMusic(results=[T("a")]), FakePlayer(), tmp_path)
     jb.now = T("x")
     out = []
@@ -493,8 +495,9 @@ async def test_seek_command(cfg, tmp_path):
 class BlockingPlayer(FakePlayer):
     """Як справжній mpv: play() триває, доки трек не дограє або його не зупинять."""
 
-    def __init__(self, cut_first_at=None):
+    def __init__(self, cut_first_at=None, length=0.5):
         super().__init__()
+        self.length = length
         self.starts = []
         self.last_played = 0.0
         self.last_error = ""
@@ -509,7 +512,7 @@ class BlockingPlayer(FakePlayer):
             return "ended"
         self._ev = asyncio.Event()
         try:
-            await asyncio.wait_for(self._ev.wait(), timeout=0.5)
+            await asyncio.wait_for(self._ev.wait(), timeout=self.length)
             res = "stopped"
         except asyncio.TimeoutError:
             res = "ended"
@@ -603,3 +606,55 @@ async def test_skip_logs_who_did_it(cfg, tmp_path, caplog):
     with caplog.at_level("INFO", logger="pipabobik.jukebox"):
         await Commands(cfg, jb, FakeMusic(), say).handle(msg("!skip", login="moder", badges={"moderator"}))
     assert "Пропущено «Обійми» — Artist — команда !skip від moder" in caplog.text
+
+
+class CountingMusic(SlowMusic):
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.resolved = []
+
+    async def resolve_stream(self, t):
+        self.resolved.append(t.video_id)
+        await asyncio.sleep(0.2)  # yt-dlp думає
+        return f"https://audio/{t.video_id}", {}
+
+
+@pytest.mark.asyncio
+async def test_next_track_is_prepared_and_double_skip_hits_only_one(cfg, tmp_path, monkeypatch):
+    monkeypatch.setattr("pipabobik.jukebox.SKIP_GUARD", 1.0)
+    p = BlockingPlayer(length=5)
+    music = CountingMusic()
+    jb = Jukebox(cfg["rules"], dict(cfg["google"], fallback_playlist=""), music, p, tmp_path)
+    for v in ("a", "b", "c"):
+        jb.add(T(v), v, v)
+    jb.activate()
+    task = asyncio.create_task(jb.run())
+    try:
+        await _run_until(jb, lambda: jb.now and jb.now.video_id == "a" and p._ev)
+        await asyncio.sleep(0.9)  # за цей час бот уже підготував «b»
+        assert music.resolved == ["a", "b"]
+        # подвійне «!скіп» / подвійне натискання без адресата
+        assert (await jb.skip("перший")).video_id == "a"
+        assert await jb.skip("другий одразу") is None
+        await _run_until(jb, lambda: jb.now and jb.now.video_id == "b" and p._ev, timeout=0.3)
+        assert jb.now.video_id == "b" and p._ev  # «b» заграв одразу, без нового запиту до YouTube
+        assert music.resolved.count("b") == 1
+        assert [t.video_id for t in jb.queue] == ["c"]
+    finally:
+        task.cancel()
+
+
+@pytest.mark.asyncio
+async def test_chat_skip_right_after_skip_is_ignored(cfg, tmp_path):
+    jb = Jukebox(cfg["rules"], cfg["google"], FakeMusic(), FakePlayer(), tmp_path)
+    jb.now = T("x")
+    out = []
+
+    async def say(t, r=None):
+        out.append(t)
+
+    c = Commands(cfg, jb, FakeMusic(), say)
+    await c.handle(msg("!скіп", uid="1", badges={"moderator"}))
+    jb.now = T("y")  # заграв наступний
+    await c.handle(msg("!скіп", uid="2", badges={"moderator"}))
+    assert "щойно пропустили" in out[-1] and jb.now.video_id == "y"

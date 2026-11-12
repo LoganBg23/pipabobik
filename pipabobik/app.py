@@ -4,6 +4,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import logging.handlers
+import os
+import subprocess
 import sys
 import time
 import webbrowser
@@ -11,14 +13,16 @@ import webbrowser
 import aiohttp
 
 from .commands import Commands
-from .config import DATA_DIR, Config
+from .config import DATA_DIR, ROOT, Config
 from .jukebox import Jukebox
 from .music import MusicSource
 from .player import Player
 from .rufilter import RuFilter
 from .server import Server
 from .twitch import TwitchAuth, TwitchChat
-from .winproc import kill_children_with_me, kill_orphan_players
+from .winproc import CREATE_BREAKAWAY_FROM_JOB, kill_children_with_me, kill_orphan_players
+
+RESTART_MARK = DATA_DIR / "restarting"  # панель бачить його і не закривається, поки бот перезапускається
 
 log = logging.getLogger("pipabobik")
 
@@ -42,11 +46,14 @@ def setup_logging(verbose: bool = False) -> None:
 
 
 class Bot:
-    def __init__(self, cfg: Config, obs_mode: bool = False, live: bool = False, paused: bool = False):
+    def __init__(self, cfg: Config, obs_mode: bool = False, live: bool = False, paused: bool = False,
+                 restarted: bool = False):
         self.cfg = cfg
         self.obs_mode = obs_mode
         self.start_live = live
         self.start_paused = paused
+        self.restarted = restarted  # запущено кнопкою «Перезапустити»: чекаємо, поки старий екземпляр звільнить порт
+        self.boot = f"{os.getpid()}-{time.time():.0f}"
         self.obs_live: bool | None = None  # None — бот запущено не з OBS
         self.google_login: bool | None = None
         self.session: aiohttp.ClientSession | None = None
@@ -111,11 +118,12 @@ class Bot:
             await self.chat.say(text, reply_to)
 
     async def run(self) -> int:
-        try:
-            await self.server.start()
-        except OSError:
+        if not await self._start_server():
             log.info("pipabobik вже запущено (порт %s зайнятий) — виходжу", self.cfg.port)
             return 0
+        if self.restarted:
+            log.info("pipabobik перезапущено")
+        RESTART_MARK.unlink(missing_ok=True)
         kill_children_with_me()  # mpv/Deno закриються разом із ботом, навіть при аварійному завершенні
         if kill_orphan_players():
             log.info("Закрито mpv, що залишився від попереднього запуску")
@@ -164,6 +172,48 @@ class Bot:
             await self.server.stop()
             await self.session.close()
         return 0
+
+    async def _start_server(self) -> bool:
+        # після перезапуску старий екземпляр ще кілька секунд закривається — чекаємо на порт
+        deadline = time.monotonic() + (25 if self.restarted else 0)
+        while True:
+            try:
+                await self.server.start()
+                return True
+            except OSError:
+                if time.monotonic() >= deadline:
+                    return False
+                await asyncio.sleep(0.5)
+
+    def restart(self) -> None:
+        """Запускає новий екземпляр бота і закриває цей. Черга зберігається."""
+        args = [a for a in sys.argv[1:] if a not in ("--live", "--paused", "--restart", "--setup", "--check")]
+        if self.jukebox.active:
+            if self.obs_mode:
+                args.append("--live")
+        elif not self.obs_mode:
+            args.append("--paused")
+        py = sys.executable
+        if sys.platform == "win32" and py.lower().endswith("python.exe") and os.path.exists(py[:-10] + "pythonw.exe"):
+            py = py[:-10] + "pythonw.exe"  # без чорного вікна консолі
+        cmd = [py, str(ROOT / "bot.py"), *args, "--restart"]
+        log.info("Перезапуск: %s", " ".join(cmd[1:]))
+        try:
+            RESTART_MARK.write_text(str(time.time()), encoding="utf-8")
+        except OSError:
+            pass
+        kw: dict = {"cwd": str(ROOT), "stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL,
+                    "stderr": subprocess.DEVNULL, "close_fds": True}
+        if sys.platform == "win32":
+            base = subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS
+            try:
+                # новий бот не має закритися разом зі старим (див. winproc: Job Object)
+                subprocess.Popen(cmd, creationflags=base | CREATE_BREAKAWAY_FROM_JOB, **kw)
+            except OSError:
+                subprocess.Popen(cmd, creationflags=base, **kw)
+        else:
+            subprocess.Popen(cmd, start_new_session=True, **kw)
+        self.shutdown.set()
 
     async def _check_google(self) -> None:
         self.google_login = await asyncio.to_thread(self._detect_google_login)

@@ -213,6 +213,8 @@
   .ghost { padding: 8px 12px; border-radius: 12px; background: var(--surface); font-weight: 800; color: var(--muted); }
   .ghost:hover { color: var(--pearl); }
   .ghost.danger:hover { background: #5c1027; color: #ffd0dc; }
+  .foot-r { display: flex; gap: 6px; }
+  .round:disabled { opacity: .45; cursor: default; }
 
   .toast { position: fixed; left: 50%; bottom: 18px; transform: translate(-50%, 20px); opacity: 0; padding: 10px 16px; border-radius: 999px;
     background: var(--pearl); color: var(--night); font-weight: 800; transition: .25s; pointer-events: none; z-index: 10; }
@@ -353,11 +355,14 @@
 
 <footer>
   <button class="ghost" id="copyWidget" title="Скопіювати адресу віджета для OBS">Адреса віджета</button>
-  <button class="ghost danger" id="quitBtn">Вимкнути pipabobik</button>
+  <div class="foot-r">
+    <button class="ghost" id="restartBtn" title="Перезапустити бота: музика замовкне на кілька секунд, черга збережеться">Перезапустити</button>
+    <button class="ghost danger" id="quitBtn">Вимкнути pipabobik</button>
+  </div>
 </footer>
 
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
-<div class="offline" id="offline"><div><h2>Бот не запущено</h2><p class="muted">Він стартує разом з OBS. Якщо OBS уже відкрито — зачекайте кілька секунд.</p></div></div>
+<div class="offline" id="offline"><div><h2 id="offTitle">Бот не запущено</h2><p class="muted" id="offText">Він стартує разом з OBS. Якщо OBS уже відкрито — зачекайте кілька секунд.</p></div></div>
 
 <script>
 (() => {
@@ -402,6 +407,7 @@
 
   function renderNow(s) {
     const n = s.now;
+    if (skippingId && (!n || n.video_id !== skippingId) && s.status !== "loading") setSkipping(null);
     $("player").classList.toggle("playing", s.status === "playing");
     $("playIcon").innerHTML = s.status === "paused" ? icons.play : icons.pause;
     $("playBtn").setAttribute("aria-label", s.status === "paused" ? "Продовжити" : "Пауза");
@@ -462,7 +468,10 @@
       : `<li class="empty">Заборонених треків немає.</li>`;
   }
 
+  let restartFrom = null;
   function apply(s) {
+    if (restartFrom && s.boot && s.boot !== restartFrom) { location.reload(); return; }  // новий бот — нова сторінка
+    if (restartFrom) return;  // старий бот ще закривається
     state = s; receivedAt = performance.now();
     $("seekBar").classList.toggle("can", canSeek());
     $("offline").classList.remove("show");
@@ -549,9 +558,26 @@
     if (!state.active) control("on");
     else control("pause");
   };
-  document.querySelectorAll("[data-act]").forEach((b) => b.onclick = () => {
+  // пропуск і бан адресуються конкретному треку; кнопки чекають, поки заграє наступний,
+  // щоб подвійне натискання не пропустило ще й його
+  let skippingId = null, skipTimer = null;
+  function setSkipping(id) {
+    skippingId = id;
+    document.querySelectorAll("[data-act]").forEach((x) => x.disabled = !!id);
+    clearTimeout(skipTimer);
+    if (id) skipTimer = setTimeout(() => setSkipping(null), 10000);
+  }
+  document.querySelectorAll("[data-act]").forEach((b) => b.onclick = async () => {
     if (!state || !state.now) return toast("Зараз нічого не грає");
-    control(b.dataset.act).then(() => toast(b.dataset.act === "ban" ? "Трек заборонено" : "Пропущено"));
+    if (skippingId) return;
+    const act = b.dataset.act, vid = state.now.video_id;
+    setSkipping(vid);
+    toast(act === "ban" ? "Забороняю…" : "Пропускаю…");
+    try {
+      const r = await control(act, { video_id: vid });
+      if (r.ignored) { toast("Цей трек уже пропущено"); setSkipping(null); }
+      else toast(act === "ban" ? "Трек заборонено" : "Пропущено");
+    } catch { setSkipping(null); }
   });
   $("likeBtn").onclick = async () => {
     if (!state || !state.now) return toast("Зараз нічого не грає");
@@ -783,6 +809,15 @@
   $("copyWidget").onclick = async () => {
     const url = `${location.origin}/widget`;
     try { await navigator.clipboard.writeText(url); toast("Скопійовано: " + url); } catch { prompt("Адреса віджета для OBS:", url); }
+  };
+  $("restartBtn").onclick = async () => {
+    if (!confirm("Перезапустити pipabobik? Музика замовкне на кілька секунд, черга збережеться.")) return;
+    const from = state ? state.boot : "";
+    try { await control("restart"); } catch { return; }
+    restartFrom = from || "?";
+    $("offTitle").textContent = "Перезапускаю pipabobik…";
+    $("offText").textContent = "Кілька секунд — і все повернеться. Черга на місці.";
+    $("offline").classList.add("show");
   };
   $("quitBtn").onclick = () => { if (confirm("Вимкнути pipabobik? Музика зупиниться, черга збережеться.")) control("shutdown"); };
 })();

@@ -76,6 +76,7 @@ class Server:
     def payload(self) -> dict:
         st = self.bot.jukebox.state()
         st["health"] = self.bot.health()
+        st["boot"] = getattr(self.bot, "boot", "")  # змінюється після перезапуску — застосунок оновить сторінку
         return st
 
     def push(self) -> None:
@@ -157,8 +158,17 @@ class Server:
         d = await request.json()
         jb = self.bot.jukebox
         action = d.get("action")
-        if action == "skip":
-            await jb.skip("кнопка в застосунку")
+        if action in ("skip", "ban"):
+            # кнопка надсилає, ЯКИЙ трек пропустити: подвійне натискання чи затримка
+            # не зачеплять наступний трек
+            vid = str(d.get("video_id") or "")
+            cur = jb.now
+            if not cur or (vid and cur.video_id != vid) or (not vid and jb.recently_skipped()):
+                return web.json_response(dict(self.payload(), ignored=True))
+            if action == "skip":
+                await jb.skip("кнопка в застосунку", only=cur)
+            else:
+                await jb.ban_current()
         elif action == "pause":
             await jb.set_pause(not jb.player.paused)
         elif action == "volume":
@@ -198,12 +208,13 @@ class Server:
             except Exception as e:  # noqa: BLE001
                 log.warning("Лайк не вдався: %s", e)
                 return web.json_response({"error": "YouTube Music не прийняв лайк — спробуйте ще раз"}, status=502)
-        elif action == "ban":
-            await jb.ban_current()
         elif action == "on":
             jb.activate()
         elif action == "off":
             await jb.deactivate()
+        elif action == "restart":
+            asyncio.get_running_loop().call_later(0.3, self.bot.restart)
+            return web.json_response({"ok": True})
         elif action == "shutdown":
             asyncio.get_running_loop().call_later(0.3, self.bot.shutdown.set)
             return web.json_response({"ok": True})
