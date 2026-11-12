@@ -78,6 +78,15 @@ async def test_panel_api_add_settings(tmp_path, monkeypatch):
         again = load_config(cfg_path)  # і збережено у файл
         assert again["rules"]["who_can_request"] == "subs" and again["rules"]["banned_words"] == ["a", "b"]
 
+        r = await client.post("/api/settings", json={"twitch": {"helpers": ["@Sonya_Tea", "sonya_tea", "кирилиця", " mod2 "],
+                                                                "client_secret": "hack"}}, headers=H)
+        assert r.status == 200
+        assert bot.cfg["twitch"]["helpers"] == ["sonya_tea", "mod2"]
+        assert bot.cfg["twitch"]["client_secret"] != "hack"  # змінювати можна лише список помічників
+        s = await (await client.get("/api/settings", headers=H)).json()
+        assert s["twitch"] == {"helpers": ["sonya_tea", "mod2"]} and s["commands"]["skip"] == "!скіп"
+        assert load_config(cfg_path)["twitch"]["helpers"] == ["sonya_tea", "mod2"]
+
         st = await (await client.post("/api/control", json={"action": "clear"}, headers=H)).json()
         assert st["queue"] == []
         assert (await client.post("/api/settings", json={}, headers={})).status == 403

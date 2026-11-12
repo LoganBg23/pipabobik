@@ -4,12 +4,15 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import secrets
 from pathlib import Path
 
 from aiohttp import web
 
 log = logging.getLogger("pipabobik.server")
+
+NICK_RE = re.compile(r"[a-z0-9_]{1,25}")  # логін Twitch
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
@@ -243,6 +246,7 @@ class Server:
         "chat": {"announce_tracks": bool, "greet_on_stream_start": bool},
         "player": {"normalize": bool},
         "google": {"fallback_playlist": str, "fallback_shuffle": bool},
+        "twitch": {"helpers": list},
     }
 
     async def api_settings_get(self, request: web.Request) -> web.Response:
@@ -250,12 +254,13 @@ class Server:
             return web.json_response({"error": "bad key"}, status=403)
         cfg = self.bot.cfg
         out = {sec: {k: cfg[sec].get(k) for k in keys} for sec, keys in self.SETTINGS_SCHEMA.items()}
+        out["commands"] = {k: v[0] for k, v in cfg["commands"].items() if v}  # лише для підказок
         return web.json_response(out)
 
     async def api_settings_set(self, request: web.Request) -> web.Response:
         if not self._authorized(request):
             return web.json_response({"error": "bad key"}, status=403)
-        from .config import set_values
+        from .config import nick, set_values
 
         d = await request.json()
         cfg = self.bot.cfg
@@ -274,6 +279,8 @@ class Server:
                         v = [str(x).strip() for x in (v if isinstance(v, list) else str(v).split(",")) if str(x).strip()]
                         if k == "banned_words":
                             v = [x.lower() for x in v]
+                        elif k == "helpers":
+                            v = [n for n in dict.fromkeys(nick(x) for x in v) if NICK_RE.fullmatch(n)]
                     else:
                         v = str(v).strip()
                 except (TypeError, ValueError):

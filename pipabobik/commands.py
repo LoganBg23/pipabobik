@@ -49,6 +49,13 @@ class Commands:
     def privileged(self, m: ChatMessage) -> bool:
         return m.is_mod or m.login.lower() in self.cfg["twitch"]["admins"]
 
+    def helper(self, m: ChatMessage) -> bool:
+        """Помічник зі списку в застосунку: лише скіп і гучність."""
+        return m.login.lower() in (self.cfg["twitch"].get("helpers") or [])
+
+    def can_control(self, m: ChatMessage) -> bool:
+        return self.privileged(m) or self.helper(m)
+
     def can_request(self, m: ChatMessage) -> bool:
         who = self.cfg["rules"].get("who_can_request", "all")
         if who == "all" or self.privileged(m):
@@ -158,15 +165,20 @@ class Commands:
         )
         if self.privileged(m):
             text += f" · модерам: {c('skip')}, {c('pause')}, {c('play')}, {c('volume')} 0-100, {c('ban')}"
+        elif self.helper(m):
+            text += f" · тобі можна: {c('skip')}, {c('volume')} 0-100"
         await self.reply(m, text)
 
-    # ── модератори та стрімер ──
+    # ── модератори та стрімер (скіп і гучність — ще й помічники) ──
     async def _deny(self, m: ChatMessage) -> None:
         await self.reply(m, "це можуть лише модератори та стрімер 😌")
 
+    async def _deny_control(self, m: ChatMessage) -> None:
+        await self.reply(m, "це можуть лише модератори, стрімер і помічники 😌")
+
     async def cmd_skip(self, m: ChatMessage, arg: str) -> None:
-        if not self.privileged(m):
-            return await self._deny(m)
+        if not self.can_control(m):
+            return await self._deny_control(m)
         t = await self.jb.skip()
         if t:
             await self.reply(m, f"⏭ скіпнуто {t.label}")
@@ -174,8 +186,8 @@ class Commands:
             await self.reply(m, "зараз нічого не грає")
 
     async def cmd_volume(self, m: ChatMessage, arg: str) -> None:
-        if not self.privileged(m):
-            return await self._deny(m)
+        if not self.can_control(m):
+            return await self._deny_control(m)
         if not arg:
             return await self.reply(m, f"🔊 гучність: {self.jb.player.volume}")
         try:

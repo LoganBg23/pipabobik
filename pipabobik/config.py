@@ -17,7 +17,8 @@ CONFIG_PATH = ROOT / "config.toml"
 EXAMPLE_PATH = ROOT / "config.example.toml"
 
 DEFAULTS: dict = {
-    "twitch": {"channel": "", "client_id": "", "client_secret": "", "admins": []},
+    # admins — усі права модератора; helpers — лише скіп і гучність (редагується в застосунку)
+    "twitch": {"channel": "", "client_id": "", "client_secret": "", "admins": [], "helpers": []},
     "google": {
         "cookies_from_browser": "firefox",
         "cookies_file": "",
@@ -39,9 +40,9 @@ DEFAULTS: dict = {
         "russian_artists": [],
     },
     "commands": {
-        "request": ["!трек", "!sr"],
+        "request": ["!трек", "!sr", "!songrequest", "!request", "!req", "!track", "!замовити", "!ік", "!nhtr"],
         "now": ["!шоце", "!song"],
-        "skip": ["!хуйня", "!skip"],
+        "skip": ["!скіп", "!скип", "!skip", "!next"],
         "queue": ["!черга", "!queue"],
         "wrong": ["!нетой", "!wrongsong"],
         "volume": ["!гучність", "!vol"],
@@ -53,6 +54,36 @@ DEFAULTS: dict = {
     "chat": {"announce_tracks": False, "greet_on_stream_start": True},
     "server": {"port": 17777},
 }
+
+
+# Старі типові набори команд: якщо в config.toml саме вони, замінюємо на нові.
+_OLD_COMMAND_DEFAULTS = {
+    "request": [["!трек", "!sr"]],
+    "skip": [["!хуйня", "!skip"]],
+}
+_RETIRED_COMMANDS = {"skip": ["!хуйня"]}
+
+
+def nick(s) -> str:
+    """Нік Twitch у нижньому регістрі, без @ і пробілів."""
+    return str(s).strip().lstrip("@").strip().lower()
+
+
+def migrate_commands(commands: dict) -> dict[str, list[str]]:
+    """Оновлює старі назви команд. Повертає те, що змінилося."""
+    changed: dict[str, list[str]] = {}
+    for key, olds in _OLD_COMMAND_DEFAULTS.items():
+        cur = commands.get(key) or []
+        new = list(DEFAULTS["commands"][key])
+        if cur in olds:
+            if cur != new:
+                commands[key] = changed[key] = new
+            continue
+        retired = _RETIRED_COMMANDS.get(key, [])
+        if any(c in retired for c in cur):
+            kept = [c for c in cur if c not in retired]
+            commands[key] = changed[key] = [new[0], *[c for c in kept if c != new[0]]]
+    return changed
 
 
 def _merge(base: dict, override: dict) -> dict:
@@ -93,7 +124,17 @@ def load_config(path: Path = CONFIG_PATH) -> Config:
         if isinstance(v, str):
             v = [v]
         cfg.raw["commands"][k] = [str(c).strip().lower() for c in v if str(c).strip()]
-    cfg.raw["twitch"]["admins"] = [a.lower().lstrip("@") for a in cfg.raw["twitch"]["admins"]]
+    changed = migrate_commands(cfg.raw["commands"])
+    if changed and path.exists():
+        try:
+            set_values(path, {"commands": changed})
+        except OSError:
+            pass  # не критично: нові назви однаково працюють з пам'яті
+    for k in ("admins", "helpers"):
+        v = cfg.raw["twitch"].get(k) or []
+        if isinstance(v, str):
+            v = v.split(",")
+        cfg.raw["twitch"][k] = [n for n in dict.fromkeys(nick(a) for a in v) if n]
     cfg.raw["rules"]["banned_words"] = [w.lower() for w in cfg.raw["rules"]["banned_words"]]
     return cfg
 

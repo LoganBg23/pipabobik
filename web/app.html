@@ -164,6 +164,16 @@
   .field.col { flex-direction: column; align-items: stretch; }
   .field textarea, .field input[type=text] { width: 100%; padding: 9px 11px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--surface); resize: vertical; }
   .group { font-size: 12px; font-weight: 800; color: var(--muted); margin: 10px 4px 2px; }
+  .addnick { display: flex; gap: 6px; margin-top: 8px; }
+  .addnick input { flex: 1; min-width: 0; padding: 9px 11px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--surface); }
+  .addnick input::placeholder { color: #8d6481; }
+  .addnick button { padding: 0 14px; border-radius: var(--r-sm); background: var(--hot); color: #fff; font-weight: 800; }
+  .nicks { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .nicks:empty { display: none; }
+  .nick { display: inline-flex; align-items: center; gap: 2px; padding: 4px 4px 4px 11px; border-radius: 999px; background: var(--raised); font-weight: 800; font-size: 13px; }
+  .nick button { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; color: var(--muted); }
+  .nick button:hover { background: var(--line); color: var(--pearl); }
+  .nick button svg { width: 12px; height: 12px; fill: currentColor; }
 
   footer { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 14px; font-size: 12px; }
   .ghost { padding: 8px 12px; border-radius: 12px; background: var(--surface); font-weight: 800; color: var(--muted); }
@@ -250,6 +260,16 @@
           <div class="num"><input type="number" id="cooldown" min="0" max="3600" data-key="rules.cooldown"></div></div>
         <div class="field"><label for="max_queue">Розмір черги</label>
           <div class="num"><input type="number" id="max_queue" min="1" max="200" data-key="rules.max_queue"></div></div>
+
+        <div class="group">Помічники</div>
+        <div class="field col">
+          <label for="helperNick">Хто ще може пропускати треки й міняти гучність<small id="helperHint">Командами в чаті. Модератори й ви вмієте це й так.</small></label>
+          <form class="addnick" id="helperForm">
+            <input type="text" id="helperNick" placeholder="Нік у Twitch" autocomplete="off" spellcheck="false" aria-label="Нік помічника">
+            <button type="submit">Додати</button>
+          </form>
+          <div class="nicks" id="helpers" aria-label="Помічники"></div>
+        </div>
 
         <div class="group">Що грає</div>
         <div class="field"><label for="only_songs">Лише пісні з YouTube Music<small>без кліпів, «10 годин…» і відео з балачками</small></label>
@@ -513,7 +533,44 @@
       else el.value = el.dataset.scale ? Math.round(v / +el.dataset.scale) : (v ?? "");
     });
     document.querySelectorAll("#who_can_request button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.v === s.rules.who_can_request));
+    helpers = (s.twitch && s.twitch.helpers) || [];
+    const cmd = s.commands || {};
+    $("helperHint").textContent = `Командами ${cmd.skip || "!скіп"} і ${cmd.volume || "!гучність"} у чаті. Модератори й ви вмієте це й так.`;
+    renderHelpers();
   }
+
+  // ── помічники ──
+  let helpers = [];
+  const xIcon = '<svg viewBox="0 0 24 24"><path d="M6.4 5L5 6.4 10.6 12 5 17.6 6.4 19l5.6-5.6 5.6 5.6 1.4-1.4-5.6-5.6L19 6.4 17.6 5 12 10.6z"/></svg>';
+  function renderHelpers() {
+    $("helpers").innerHTML = helpers.map((n) =>
+      `<span class="nick">@${esc(n)}<button type="button" data-unhelper="${esc(n)}" title="Прибрати" aria-label="Прибрати @${esc(n)}">${xIcon}</button></span>`).join("");
+  }
+  async function saveHelpers(msg) {
+    await api("/api/settings", { twitch: { helpers } });
+    toast(msg);
+  }
+  $("helperForm").onsubmit = async (e) => {
+    e.preventDefault();
+    // приймаємо «@нік», «Нік» і посилання twitch.tv/нік
+    const raw = $("helperNick").value.trim().replace(/^.*twitch\.tv\//i, "").replace(/^@/, "").split(/[/?#\s]/)[0].toLowerCase();
+    if (!raw) return;
+    if (!/^[a-z0-9_]{1,25}$/.test(raw)) return toast("Нік Twitch: лише латиниця, цифри й _");
+    if (helpers.includes(raw)) return toast(`@${raw} уже в списку`);
+    helpers = [...helpers, raw];
+    renderHelpers();
+    $("helperNick").value = "";
+    try { await saveHelpers(`@${raw} тепер може скіпати й міняти гучність`); }
+    catch { helpers = helpers.filter((n) => n !== raw); renderHelpers(); }
+  };
+  $("helpers").addEventListener("click", async (e) => {
+    const b = e.target.closest("[data-unhelper]");
+    if (!b) return;
+    const n = b.dataset.unhelper, before = helpers;
+    helpers = helpers.filter((x) => x !== n);
+    renderHelpers();
+    try { await saveHelpers(`@${n} більше не помічник`); } catch { helpers = before; renderHelpers(); }
+  });
   function queueSave(sec, k, v) {
     (pending[sec] ||= {})[k] = v;
     clearTimeout(saveTimer);

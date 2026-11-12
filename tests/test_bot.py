@@ -213,17 +213,17 @@ async def test_commands_flow(cfg, tmp_path):
     await c.handle(msg("!трек"))
     assert "напиши назву" in out[-1]
 
-    await c.handle(msg("!хуйня", login="viewer"))
+    await c.handle(msg("!скіп", login="viewer"))
     assert "лише модератори" in out[-1]
 
     jb.now = jb.queue.pop(0)
     await c.handle(msg("!шоце"))
     assert "Обійми" in out[-1] and "music.youtube.com" in out[-1]
 
-    await c.handle(msg("!хуйня", login="moder", uid="9", badges={"moderator"}))
+    await c.handle(msg("!скіп", login="moder", uid="9", badges={"moderator"}))
     assert "скіпнуто" in out[-1]
 
-    await c.handle(msg("!хуйня", login="streamer", uid="10", badges={"broadcaster"}))
+    await c.handle(msg("!skip", login="streamer", uid="10", badges={"broadcaster"}))
     assert out[-1]  # стрімер теж може
 
     await c.handle(msg("!гучність 35", uid="9", badges={"moderator"}))
@@ -251,8 +251,96 @@ async def test_admins_from_config_can_skip(cfg, tmp_path):
     async def say(t, r=None):
         out.append(t)
 
-    await Commands(cfg, jb, FakeMusic(), say).handle(msg("!хуйня", login="helper"))
+    await Commands(cfg, jb, FakeMusic(), say).handle(msg("!скіп", login="helper"))
     assert "скіпнуто" in out[-1]
+
+
+@pytest.mark.asyncio
+async def test_helpers_can_only_skip_and_change_volume(cfg, tmp_path):
+    cfg.raw["twitch"]["helpers"] = ["sonya_tea"]
+    jb = Jukebox(cfg["rules"], cfg["google"], FakeMusic(), FakePlayer(), tmp_path)
+    jb.now = T("x")
+    out = []
+
+    async def say(t, r=None):
+        out.append(t)
+
+    c = Commands(cfg, jb, FakeMusic(), say)
+    await c.handle(msg("!гучність 20", login="Sonya_Tea", uid="7"))
+    assert jb.player.volume == 20
+    await c.handle(msg("!пауза", login="sonya_tea", uid="7"))
+    assert "лише модератори" in out[-1] and not jb.player.paused
+    await c.handle(msg("!бантрек", login="sonya_tea", uid="7"))
+    assert "лише модератори" in out[-1]
+    await c.handle(msg("!музика", login="sonya_tea", uid="7"))
+    assert "тобі можна: !скіп, !гучність" in out[-1]
+    await c.handle(msg("!скіп", login="sonya_tea", uid="7"))
+    assert "скіпнуто" in out[-1]
+
+    await c.handle(msg("!гучність 90", login="viewer", uid="8"))
+    assert "помічники" in out[-1] and jb.player.volume == 20
+
+    # прибрали з помічників у застосунку — права зникають одразу
+    cfg.raw["twitch"]["helpers"] = []
+    await c.handle(msg("!гучність 90", login="sonya_tea", uid="7"))
+    assert jb.player.volume == 20
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cmd", ["!трек", "!sr", "!songrequest", "!request", "!req", "!track", "!замовити", "!ік", "!nhtr", "!SR"])
+async def test_request_aliases(cfg, tmp_path, cmd):
+    music = FakeMusic(results=[T("good", dur=180)])
+    jb = Jukebox(cfg["rules"], cfg["google"], music, FakePlayer(), tmp_path)
+    out = []
+
+    async def say(t, r=None):
+        out.append(t)
+
+    await Commands(cfg, jb, music, say).handle(msg(f"{cmd} обійми"))
+    assert jb.queue and jb.queue[0].video_id == "good"
+
+
+@pytest.mark.asyncio
+async def test_old_skip_command_is_gone(cfg, tmp_path):
+    jb = Jukebox(cfg["rules"], cfg["google"], FakeMusic(), FakePlayer(), tmp_path)
+    jb.now = T("x")
+    out = []
+
+    async def say(t, r=None):
+        out.append(t)
+
+    c = Commands(cfg, jb, FakeMusic(), say)
+    await c.handle(msg("!хуйня", login="moder", uid="9", badges={"moderator"}))
+    assert out == [] and jb.now
+    for alias in ("!скип", "!next"):
+        jb.now = T("x")
+        await c.handle(msg(alias, login="moder", uid="9", badges={"moderator"}))
+        assert "скіпнуто" in out[-1]
+
+
+def test_old_config_commands_are_migrated(tmp_path):
+    p = tmp_path / "config.toml"
+    p.write_text(
+        '[twitch]\nchannel = "pipa"\nadmins = ["@Boss"]\n\n[commands]\n# мої команди\n'
+        'request = ["!трек", "!sr"]\nnow     = ["!шоце", "!song"]\nskip    = ["!хуйня", "!skip"]\n',
+        encoding="utf-8",
+    )
+    cfg = load_config(p)
+    assert cfg["commands"]["skip"] == DEFAULTS["commands"]["skip"]
+    assert cfg["commands"]["request"] == DEFAULTS["commands"]["request"]
+    assert cfg["commands"]["now"] == ["!шоце", "!song"]
+    assert cfg["twitch"]["admins"] == ["boss"] and cfg["twitch"]["helpers"] == []
+    text = p.read_text(encoding="utf-8")
+    assert "!хуйня" not in text and "# мої команди" in text  # збережено у файл, коментарі на місці
+    assert load_config(p)["commands"]["skip"][0] == "!скіп"
+
+
+def test_custom_commands_keep_user_choice(tmp_path):
+    p = tmp_path / "config.toml"
+    p.write_text('[commands]\nrequest = ["!пісню"]\nskip = ["!хуйня", "!далі"]\n', encoding="utf-8")
+    cfg = load_config(p)
+    assert cfg["commands"]["request"] == ["!пісню"]  # власний вибір не чіпаємо
+    assert cfg["commands"]["skip"] == ["!скіп", "!далі"]  # прибрали лише стару назву
 
 
 # ── конфіг ──
@@ -271,6 +359,7 @@ def test_set_values_preserves_comments(tmp_path):
 
 def test_example_config_is_valid():
     cfg = load_config(Path(__file__).resolve().parent.parent / "config.example.toml")
-    assert cfg["commands"]["skip"][0] == "!хуйня"
+    assert cfg["commands"]["skip"][0] == "!скіп"
+    assert cfg["twitch"]["helpers"] == []
     assert cfg["commands"]["now"][0] == "!шоце"
     assert cfg["commands"]["request"][0] == "!трек"
