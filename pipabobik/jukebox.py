@@ -15,6 +15,7 @@ from .player import Player
 RESUME_ATTEMPTS = 2  # скільки разів продовжувати трек, який YouTube обірвав посередині
 SKIP_GUARD = 3.0  # с: повторний «скіп» без адресата одразу після попереднього не чіпає наступний трек
 STREAM_TTL = 20 * 60  # с: скільки тримати наперед отримане посилання на аудіо
+PREFETCH_AHEAD = 2  # скільки наступних треків готувати заздалегідь (на випадок кількох скіпів поспіль)
 
 log = logging.getLogger("pipabobik.jukebox")
 
@@ -51,6 +52,7 @@ class Jukebox:
         self._streams: dict[str, tuple[tuple[str, dict], float]] = {}
         self._stream_tasks: dict[str, asyncio.Task] = {}
         self._prefetch_task: asyncio.Task | None = None
+        self._fallback_gen = 0  # змінюється при перемиканні фонового плейлиста
         self.listeners: list[Callable[[], None]] = []
         self.say: Notify | None = None
         self.announce = False
@@ -163,8 +165,8 @@ class Jukebox:
         if self.now and self.now.source == "fallback" and self.rules.get("interrupt_fallback", True):
             asyncio.create_task(self.skip("замовлення перебиває фонову музику", only=self.now))
         self._wake.set()
-        if pos == 1 and self.now:
-            self.prefetch()  # цей трек наступний — готуємо його заздалегідь
+        if pos <= PREFETCH_AHEAD and self.now:
+            self.prefetch()  # цей трек скоро заграє — готуємо його заздалегідь
         self.save()
         self.changed()
         return pos
@@ -234,9 +236,16 @@ class Jukebox:
             log.exception("фільтр")
             return None
 
+    def wake(self) -> None:
+        """Розбудити головний цикл (напр. з'явився фоновий плейлист, а до того була тиша)."""
+        self._wake.set()
+
     def reset_fallback(self) -> None:
         self._fallback = []
         self._fallback_loaded_at = 0.0
+        self._fallback_gen += 1
+        if self._prefetch_task and not self._prefetch_task.done():
+            self._prefetch_task.cancel()
 
     # ── керування ──
     async def skip(self, reason: str = "", only: Track | None = None) -> Track | None:
@@ -297,18 +306,19 @@ class Jukebox:
 
     async def _prefetch(self) -> None:
         try:
-            await asyncio.sleep(0.5)  # даємо поточному треку спокійно стартувати
-            if self.queue:
-                nxt = self.queue[0]
-            else:
+            await asyncio.sleep(0.2)  # даємо поточному треку спокійно стартувати
+            targets = list(self.queue[:PREFETCH_AHEAD])
+            if len(targets) < PREFETCH_AHEAD:
+                gen = self._fallback_gen
                 nxt = await self._next_fallback()
-                if nxt is None:
-                    return
-                self._fallback.insert(0, nxt)
+                if nxt is not None and gen == self._fallback_gen:
+                    self._fallback.insert(0, nxt)  # повертаємо: заграє наступним
+                    targets.append(nxt)
             for vid in [v for v, (_, at) in self._streams.items() if time.time() - at > STREAM_TTL]:
                 self._streams.pop(vid, None)
-            if nxt.video_id not in self._streams:
-                await asyncio.shield(self._stream_task(nxt))
+            for t in targets:
+                if t.video_id not in self._streams:
+                    await asyncio.shield(self._stream_task(t))
         except asyncio.CancelledError:
             pass
         except Exception:  # noqa: BLE001

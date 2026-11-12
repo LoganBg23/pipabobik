@@ -117,6 +117,21 @@
 
   .onair { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; padding: 12px 14px; border-radius: var(--r-md); background: var(--raised); }
   .onair p { font-size: 12px; }
+  .fb { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; padding: 9px 14px; border-radius: var(--r-md); background: var(--raised); }
+  .fb label { font-weight: 700; font-size: 13px; white-space: nowrap; }
+  .fb select { min-width: 0; max-width: 60%; padding: 6px 10px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--surface); font-weight: 700; }
+  .pls { list-style: none; display: grid; gap: 4px; margin-top: 8px; }
+  .pl { display: flex; align-items: center; gap: 8px; padding: 7px 8px 7px 12px; border-radius: var(--r-sm); background: var(--surface); }
+  .pl .nm { flex: 1; min-width: 0; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pl .nm small { display: inline; margin-left: 6px; }
+  .pl.on { box-shadow: inset 0 0 0 1px var(--hot); }
+  .pl .tag { font-size: 11px; font-weight: 800; color: var(--hot); }
+  .addpl { display: grid; grid-template-columns: 1fr auto; gap: 6px; margin-top: 8px; }
+  .addpl input { min-width: 0; padding: 9px 11px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--surface); }
+  .addpl input::placeholder { color: #8d6481; }
+  .addpl #plLink { grid-column: 1 / -1; }
+  .addpl button { padding: 0 14px; border-radius: var(--r-sm); background: var(--hot); color: #fff; font-weight: 800; }
+  .addpl button:disabled { opacity: .5; }
 
   /* перемикач */
   .switch { position: relative; width: 46px; height: 26px; flex: none; }
@@ -258,6 +273,10 @@
       <div><b>Музика</b><p class="muted" id="onairHint">Вмикається сама з початком трансляції</p></div>
       <label class="switch"><input type="checkbox" id="onair" aria-label="Увімкнути музику"><span></span></label>
     </div>
+    <div class="fb">
+      <label for="fbSelect">Коли черга порожня</label>
+      <select id="fbSelect" aria-label="Фоновий плейлист"></select>
+    </div>
   </section>
 
   <section class="panel">
@@ -331,8 +350,16 @@
           <label class="switch"><input type="checkbox" id="interrupt_fallback" data-key="rules.interrupt_fallback"><span></span></label></div>
         <div class="field"><label for="normalize">Вирівнювати гучність<small>з наступного треку</small></label>
           <label class="switch"><input type="checkbox" id="normalize" data-key="player.normalize"><span></span></label></div>
-        <div class="field col"><label for="fallback_playlist">Коли черга порожня<small>LM — ваші вподобані, посилання на плейлист, або порожньо для тиші</small></label>
-          <input type="text" id="fallback_playlist" data-key="google.fallback_playlist" placeholder="LM"></div>
+        <div class="field col"><span class="lbl">Фонові плейлисти<small>Грають, коли черга порожня. Перемикати — над вкладками, під перемикачем «Музика».</small></span>
+          <ul class="pls" id="plsList"></ul>
+          <form class="addpl" id="plForm">
+            <input type="text" id="plLink" placeholder="Посилання на плейлист YouTube Music" autocomplete="off" spellcheck="false" aria-label="Посилання на плейлист">
+            <input type="text" id="plName" placeholder="Назва (необов'язково)" autocomplete="off" aria-label="Назва плейлиста">
+            <button type="submit">Додати</button>
+          </form>
+        </div>
+        <div class="field"><label for="plShuffle">Перемішувати фоновий плейлист</label>
+          <label class="switch"><input type="checkbox" id="plShuffle"><span></span></label></div>
         <div class="field col"><label for="banned_words">Заборонені слова<small>через кому — треки з ними в назві не додаються</small></label>
           <textarea id="banned_words" rows="2" data-key="rules.banned_words" placeholder="10 hours, earrape"></textarea></div>
 
@@ -473,6 +500,7 @@
     if (restartFrom && s.boot && s.boot !== restartFrom) { location.reload(); return; }  // новий бот — нова сторінка
     if (restartFrom) return;  // старий бот ще закривається
     state = s; receivedAt = performance.now();
+    if (pls && s.fallback !== undefined && s.fallback !== pls.active && document.activeElement !== $("fbSelect")) loadPlaylists();
     $("seekBar").classList.toggle("can", canSeek());
     $("offline").classList.remove("show");
     renderChips(s.health || {}, s); renderNow(s); renderQueue(s); renderHistory(s); tick();
@@ -622,7 +650,7 @@
   document.querySelectorAll(".tab").forEach((t) => t.onclick = () => {
     document.querySelectorAll(".tab").forEach((x) => x.setAttribute("aria-selected", x === t));
     document.querySelectorAll(".view").forEach((v) => v.hidden = v.id !== "v-" + t.dataset.tab);
-    if (t.dataset.tab === "rules") loadSettings();
+    if (t.dataset.tab === "rules") { loadSettings(); loadPlaylists(); }
     if (t.dataset.tab === "cmds") loadAccess();
     if (t.dataset.tab === "add") $("q").focus();
   });
@@ -670,6 +698,53 @@
       queueSave(sec, k, v);
     });
   });
+
+  // ── фонові плейлисти ──
+  let pls = null;
+  async function loadPlaylists() {
+    try { pls = await api("/api/playlists", null, "GET"); } catch { return; }
+    renderPlaylists();
+  }
+  async function plAction(body, msg) {
+    try { pls = await api("/api/playlists", body); if (msg) toast(typeof msg === "function" ? msg() : msg); } catch {}
+    renderPlaylists();
+  }
+  const plName = (id) => id ? ((pls && pls.items.find((x) => x.id === id)) || { name: id }).name : "Тиша";
+  function renderPlaylists() {
+    if (!pls) return;
+    const sel = $("fbSelect");
+    sel.innerHTML = pls.items.map((x) => `<option value="${esc(x.id)}">${esc(x.name)}</option>`).join("") + `<option value="">Тиша</option>`;
+    sel.value = pls.active;
+    $("plsList").innerHTML = pls.items.map((x) => `<li class="pl ${x.id === pls.active ? "on" : ""}">
+        <span class="nm">${esc(x.name)}<small>${x.id === "LM" ? "з YouTube Music" : ""}</small></span>
+        ${x.id === pls.active ? '<span class="tag">обрано</span>' : `<button type="button" class="ib" data-pl-select="${esc(x.id)}">Увімкнути</button>`}
+        <button type="button" class="ib" data-pl-remove="${esc(x.id)}" title="Прибрати зі списку" aria-label="Прибрати ${esc(x.name)}">${xIcon}</button>
+      </li>`).join("") || `<li class="empty">Додайте плейлист — він гратиме, коли черга порожня.</li>`;
+    $("plShuffle").checked = !!pls.shuffle;
+  }
+  $("fbSelect").onchange = (e) => { const id = e.target.value; plAction({ action: "select", id }, () => id ? `Фон: ${plName(id)}` : "Коли черга порожня — тиша"); };
+  $("plsList").addEventListener("click", (e) => {
+    const s = e.target.closest("[data-pl-select]");
+    if (s) return plAction({ action: "select", id: s.dataset.plSelect }, () => `Фон: ${plName(s.dataset.plSelect)}`);
+    const r = e.target.closest("[data-pl-remove]");
+    if (r && confirm(`Прибрати «${plName(r.dataset.plRemove)}» зі списку?`)) plAction({ action: "remove", id: r.dataset.plRemove }, "Прибрано");
+  });
+  $("plForm").onsubmit = async (e) => {
+    e.preventDefault();
+    const link = $("plLink").value.trim();
+    if (!link) return $("plLink").focus();
+    const btn = e.submitter || $("plForm").querySelector("button");
+    btn.disabled = true; btn.textContent = "Додаю…";
+    try {
+      pls = await api("/api/playlists", { action: "add", link, name: $("plName").value.trim() });
+      $("plLink").value = ""; $("plName").value = "";
+      toast(`Додано: ${pls.items[pls.items.length - 1].name}`);
+    } catch {}
+    btn.disabled = false; btn.textContent = "Додати";
+    renderPlaylists();
+  };
+  $("plShuffle").onchange = (e) => plAction({ action: "shuffle", value: e.target.checked }, e.target.checked ? "Перемішую" : "По порядку");
+  loadPlaylists();
 
   // ── команди, ролі, ліміти ──
   const xIcon = '<svg viewBox="0 0 24 24"><path d="M6.4 5L5 6.4 10.6 12 5 17.6 6.4 19l5.6-5.6 5.6 5.6 1.4-1.4-5.6-5.6L19 6.4 17.6 5 12 10.6z"/></svg>';

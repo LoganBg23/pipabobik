@@ -631,8 +631,8 @@ async def test_next_track_is_prepared_and_double_skip_hits_only_one(cfg, tmp_pat
     task = asyncio.create_task(jb.run())
     try:
         await _run_until(jb, lambda: jb.now and jb.now.video_id == "a" and p._ev)
-        await asyncio.sleep(0.9)  # за цей час бот уже підготував «b»
-        assert music.resolved == ["a", "b"]
+        await asyncio.sleep(0.9)  # за цей час бот уже підготував «b» і «c» (на випадок двох скіпів)
+        assert music.resolved == ["a", "b", "c"]
         # подвійне «!скіп» / подвійне натискання без адресата
         assert (await jb.skip("перший")).video_id == "a"
         assert await jb.skip("другий одразу") is None
@@ -658,3 +658,23 @@ async def test_chat_skip_right_after_skip_is_ignored(cfg, tmp_path):
     jb.now = T("y")  # заграв наступний
     await c.handle(msg("!скіп", uid="2", badges={"moderator"}))
     assert "щойно пропустили" in out[-1] and jb.now.video_id == "y"
+
+
+@pytest.mark.asyncio
+async def test_switching_playlist_drops_prefetched_fallback(cfg, tmp_path):
+    p = BlockingPlayer(length=5)
+    music = CountingMusic(fallback=[T("old1"), T("old2"), T("old3")])
+    g = dict(cfg["google"], fallback_playlist="PLold", fallback_shuffle=False)
+    jb = Jukebox(cfg["rules"], g, music, p, tmp_path)
+    jb.activate()
+    task = asyncio.create_task(jb.run())
+    try:
+        await _run_until(jb, lambda: jb.now and jb.now.video_id == "old1" and p._ev)
+        music.fallback = [T("new1"), T("new2")]
+        g["fallback_playlist"] = "PLnew"
+        jb.reset_fallback()
+        await jb.skip("перемкнули", only=jb.now)
+        await _run_until(jb, lambda: jb.now and jb.now.video_id.startswith("new") and p._ev)
+        assert jb.now.video_id == "new1"  # жодного треку зі старого плейлиста
+    finally:
+        task.cancel()

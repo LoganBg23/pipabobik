@@ -10,6 +10,8 @@ from pathlib import Path
 
 from aiohttp import web
 
+from .playlists import playlist_id
+
 log = logging.getLogger("pipabobik.server")
 
 NICK_RE = re.compile(r"[a-z0-9_]{1,25}")  # логін Twitch
@@ -42,6 +44,8 @@ class Server:
         r.add_post("/api/add", self.api_add)
         r.add_get("/api/settings", self.api_settings_get)
         r.add_post("/api/settings", self.api_settings_set)
+        r.add_get("/api/playlists", self.api_playlists_get)
+        r.add_post("/api/playlists", self.api_playlists_set)
         r.add_get("/api/access", self.api_access_get)
         r.add_post("/api/access", self.api_access_set)
         r.add_get("/api/state", self.api_state)
@@ -76,7 +80,8 @@ class Server:
     def payload(self) -> dict:
         st = self.bot.jukebox.state()
         st["health"] = self.bot.health()
-        st["boot"] = getattr(self.bot, "boot", "")  # змінюється після перезапуску — застосунок оновить сторінку
+        st["boot"] = getattr(self.bot, "boot", "")
+        st["fallback"] = playlist_id(self.bot.cfg["google"].get("fallback_playlist", "")) or ""  # змінюється після перезапуску — застосунок оновить сторінку
         return st
 
     def push(self) -> None:
@@ -322,6 +327,79 @@ class Server:
             set_values(cfg.path, updates)
             self.bot.apply_settings(updates)
         return web.json_response({"ok": True})
+
+    # ── фонові плейлисти ──
+    def _playlists_payload(self) -> dict:
+        g = self.bot.cfg["google"]
+        from .playlists import playlist_id
+
+        return {
+            "items": list(self.bot.playlists.items),
+            "active": playlist_id(g.get("fallback_playlist", "")) or "",
+            "shuffle": bool(g.get("fallback_shuffle", True)),
+        }
+
+    async def api_playlists_get(self, request: web.Request) -> web.Response:
+        if not self._authorized(request):
+            return web.json_response({"error": "bad key"}, status=403)
+        return web.json_response(self._playlists_payload())
+
+    async def _select_playlist(self, pid: str) -> None:
+        from .config import set_values
+
+        cfg, jb = self.bot.cfg, self.bot.jukebox
+        cfg["google"]["fallback_playlist"] = pid
+        set_values(cfg.path, {"google": {"fallback_playlist": pid}})
+        jb.reset_fallback()
+        cur = jb.now
+        if cur and cur.source == "fallback":
+            await jb.skip("перемкнули фоновий плейлист", only=cur)  # новий плейлист — одразу
+        jb.wake()
+        jb.changed()
+
+    async def api_playlists_set(self, request: web.Request) -> web.Response:
+        if not self._authorized(request):
+            return web.json_response({"error": "bad key"}, status=403)
+        from .config import set_values
+        from .playlists import playlist_id
+
+        d = await request.json()
+        pls = self.bot.playlists
+        action = d.get("action")
+        g = self.bot.cfg["google"]
+        if action == "add":
+            pid = playlist_id(str(d.get("link") or ""))
+            if not pid:
+                return web.json_response({"error": "Не бачу плейлиста в цьому посиланні. Скопіюйте адресу сторінки плейлиста з YouTube Music"}, status=400)
+            name = str(d.get("name") or "").strip()[:60]
+            if not name:
+                name = (await self.bot.music.playlist_title(pid)) or ("Вподобані" if pid == "LM" else "Плейлист")
+            pls.add(pid, name)
+            if d.get("select"):
+                await self._select_playlist(pid)
+        elif action == "select":
+            pid = str(d.get("id") or "")
+            if pid and not pls.get(pid):
+                return web.json_response({"error": "Такого плейлиста немає в списку"}, status=400)
+            await self._select_playlist(pid)
+        elif action == "remove":
+            pid = str(d.get("id") or "")
+            pls.remove(pid)
+            if playlist_id(g.get("fallback_playlist", "")) == pid:
+                await self._select_playlist(pls.items[0]["id"] if pls.items else "")
+        elif action == "rename":
+            item = pls.get(str(d.get("id") or ""))
+            name = str(d.get("name") or "").strip()[:60]
+            if item and name:
+                item["name"] = name
+                pls.save()
+        elif action == "shuffle":
+            g["fallback_shuffle"] = bool(d.get("value"))
+            set_values(self.bot.cfg.path, {"google": {"fallback_shuffle": g["fallback_shuffle"]}})
+            self.bot.jukebox.reset_fallback()  # перемішаємо заново з наступного фонового треку
+        else:
+            return web.json_response({"error": "unknown action"}, status=400)
+        return web.json_response(self._playlists_payload())
 
     # ── команди, ролі, ліміти ──
     def _access_payload(self) -> dict:

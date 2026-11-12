@@ -239,3 +239,93 @@ async def test_restart_action(tmp_path, monkeypatch):
         assert called == [True]
     finally:
         await client.close()
+
+
+@pytest.mark.parametrize("text,pid", [
+    ("LM", "LM"), ("lm", "LM"),
+    ("https://music.youtube.com/playlist?list=PLabc_DEF-123&si=x", "PLabc_DEF-123"),
+    ("https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=RDCLAK5uy_kXyz", "RDCLAK5uy_kXyz"),
+    ("https://music.youtube.com/browse/VLPLabc123", "PLabc123"),
+    ("OLAK5uy_mAbc", "OLAK5uy_mAbc"), ("", None), ("https://example.com/x y", None),
+])
+def test_playlist_id(text, pid):
+    from pipabobik.playlists import playlist_id
+
+    assert playlist_id(text) == pid
+
+
+@pytest.mark.asyncio
+async def test_playlists_api(tmp_path, monkeypatch):
+    from pipabobik.music import Track
+
+    monkeypatch.setattr("pipabobik.app.DATA_DIR", tmp_path)
+    cfg_path = tmp_path / "config.toml"
+    cfg_path.write_text('[google]\nfallback_playlist = "https://music.youtube.com/playlist?list=PLold"\n', encoding="utf-8")
+    bot = Bot(load_config(cfg_path))
+    bot.server.key = "k"
+    H = {"X-Pipabobik-Key": "k"}
+    skipped = []
+
+    async def fake_skip(reason="", only=None):
+        skipped.append(reason)
+
+    async def fake_title(pid):
+        return "Чілл на стрім"
+
+    bot.jukebox.skip = fake_skip
+    bot.music.playlist_title = fake_title
+    client = TestClient(TestServer(bot.server.app))
+    await client.start_server()
+    try:
+        p = await (await client.get("/api/playlists", headers=H)).json()
+        # перший запуск: «Вподобані» + плейлист, що вже був у config.toml
+        assert [x["id"] for x in p["items"]] == ["LM", "PLold"] and p["active"] == "PLold"
+
+        p = await (await client.post("/api/playlists", json={"action": "add", "link": "https://music.youtube.com/playlist?list=PLchill"}, headers=H)).json()
+        assert p["items"][-1] == {"id": "PLchill", "name": "Чілл на стрім"}
+        r = await client.post("/api/playlists", json={"action": "add", "link": "просто текст"}, headers=H)
+        assert r.status == 400
+
+        bot.jukebox.now = Track("fbfbfbfbfbf", "Фон", "X", source="fallback")
+        bot.jukebox._fallback = [Track("old00000000", "Старий", "X", source="fallback")]
+        p = await (await client.post("/api/playlists", json={"action": "select", "id": "PLchill"}, headers=H)).json()
+        assert p["active"] == "PLchill" and bot.cfg["google"]["fallback_playlist"] == "PLchill"
+        assert skipped == ["перемкнули фоновий плейлист"] and bot.jukebox._fallback == []  # новий плейлист — одразу
+        assert load_config(cfg_path)["google"]["fallback_playlist"] == "PLchill"
+        st = await (await client.get("/api/state", headers=H)).json()
+        assert st["fallback"] == "PLchill"
+
+        p = await (await client.post("/api/playlists", json={"action": "select", "id": ""}, headers=H)).json()
+        assert p["active"] == ""  # тиша
+        assert (await client.post("/api/playlists", json={"action": "select", "id": "PLnope"}, headers=H)).status == 400
+
+        await client.post("/api/playlists", json={"action": "select", "id": "PLchill"}, headers=H)
+        p = await (await client.post("/api/playlists", json={"action": "remove", "id": "PLchill"}, headers=H)).json()
+        assert "PLchill" not in [x["id"] for x in p["items"]] and p["active"] == "LM"  # прибрали те, що грало
+
+        p = await (await client.post("/api/playlists", json={"action": "shuffle", "value": False}, headers=H)).json()
+        assert p["shuffle"] is False and load_config(cfg_path)["google"]["fallback_shuffle"] is False
+
+        # список пережив перезапуск
+        assert [x["id"] for x in Bot(load_config(cfg_path)).playlists.items] == ["LM", "PLold"]
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_search_cache():
+    from pipabobik.music import MusicSource, Track
+
+    m = MusicSource()
+    calls = []
+
+    def fake(q, only_songs, limit=8):
+        calls.append(q)
+        return [Track("aaaaaaaaaaa", "Обійми", "Океан Ельзи")]
+
+    m._search_sync = fake
+    a = await m.search("Обійми  океан")
+    b = await m.search("обійми океан")
+    assert calls == ["Обійми  океан"] and a[0].title == b[0].title
+    b[0].requested_by = "x"  # черга змінює трек — кеш від цього не псується
+    assert (await m.search("обійми океан"))[0].requested_by == ""

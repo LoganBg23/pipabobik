@@ -17,6 +17,7 @@ from .config import DATA_DIR, ROOT, Config
 from .jukebox import Jukebox
 from .music import MusicSource
 from .player import Player
+from .playlists import Playlists
 from .rufilter import RuFilter
 from .server import Server
 from .twitch import TwitchAuth, TwitchChat
@@ -69,6 +70,7 @@ class Bot:
         p = cfg["player"]
         self.player = Player(p["mpv_path"], p["volume"], p["normalize"], p["audio_device"], p["show_window"])
         self.jukebox = Jukebox(cfg["rules"], g, self.music, self.player, DATA_DIR)
+        self.playlists = Playlists(DATA_DIR / "playlists.json", g.get("fallback_playlist", ""))
         self.jukebox.announce = bool(cfg["chat"].get("announce_tracks"))
         self.server = Server(self, cfg.port, DATA_DIR)
         self.chat: TwitchChat | None = None
@@ -159,6 +161,7 @@ class Bot:
         if self.start_live or not (self.obs_mode or self.start_paused):
             self.jukebox.activate()
         asyncio.create_task(self._check_google())
+        asyncio.create_task(self.music.warmup())  # перший пошук і перший трек — без очікування
         try:
             await self.shutdown.wait()
         finally:

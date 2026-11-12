@@ -111,6 +111,8 @@ class MusicSource:
         self._ydl_lock = threading.Lock()
         self._ytm_auth = None  # YTMusic з вашим логіном — для лайків
         self._ytm_auth_at = 0.0
+        # однакові запити («!трек обійми» кілька разів за стрім) не ганяємо в YouTube повторно
+        self._search_cache: dict[tuple[str, bool], tuple[float, list[Track]]] = {}
 
     # ── ytmusicapi ──
     @property
@@ -151,8 +153,48 @@ class MusicSource:
                 break
         return tracks
 
+    SEARCH_TTL = 15 * 60
+
     async def search(self, query: str, only_songs: bool = True) -> list[Track]:
-        return await asyncio.to_thread(self._search_sync, query, only_songs)
+        key = (" ".join(query.lower().split()), bool(only_songs))
+        hit = self._search_cache.get(key)
+        if hit and time.time() - hit[0] < self.SEARCH_TTL:
+            return [Track.from_dict(t.to_dict()) for t in hit[1]]  # копії: черга змінює поля треку
+        found = await asyncio.to_thread(self._search_sync, query, only_songs)
+        if found:
+            if len(self._search_cache) > 300:
+                self._search_cache.clear()
+            self._search_cache[key] = (time.time(), [Track.from_dict(t.to_dict()) for t in found])
+        return found
+
+    def _warmup_sync(self) -> None:
+        """Готує все наперед, щоб перший «!трек» і перший трек не чекали на ініціалізацію."""
+        try:
+            _ = self.ytm  # YTMusic при створенні звертається до YouTube
+        except Exception as e:  # noqa: BLE001
+            log.info("Підготовка пошуку не вдалася: %s", e)
+        try:
+            with self._ydl_lock:
+                self._get_ydl("stream")  # читання cookies з Firefox — найдовша частина
+        except Exception as e:  # noqa: BLE001
+            log.info("Підготовка yt-dlp не вдалася: %s", e)
+
+    async def warmup(self) -> None:
+        await asyncio.to_thread(self._warmup_sync)
+
+    def _playlist_title_sync(self, playlist_id: str) -> str | None:
+        try:
+            data = self.ytm.get_playlist(playlist_id, limit=1)
+            return (data or {}).get("title") or None
+        except Exception as e:  # noqa: BLE001
+            log.info("Назву плейлиста %s не отримано: %s", playlist_id, e)
+            return None
+
+    async def playlist_title(self, playlist_id: str) -> str | None:
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(self._playlist_title_sync, playlist_id), timeout=10)
+        except asyncio.TimeoutError:
+            return None
 
     def _by_id_sync(self, video_id: str) -> Track | None:
         try:
@@ -257,6 +299,9 @@ class MusicSource:
 
     def _opts_for(self, kind: str) -> dict:
         opts = self.ydl_opts()
+        # Аудіо береться прямим посиланням: маніфести HLS/DASH і перекладені субтитри не потрібні,
+        # а це зайві запити до YouTube на кожен трек.
+        opts["extractor_args"] = {"youtube": {"skip": ["hls", "dash", "translated_subs"]}}
         if kind == "flat":
             opts.update({"extract_flat": "in_playlist", "noplaylist": False})
             opts.pop("format", None)
