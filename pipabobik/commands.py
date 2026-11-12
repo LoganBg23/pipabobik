@@ -202,7 +202,7 @@ class Commands:
         await self.reply(m, f"це можуть лише {who + ' і ' if who else ''}стрімер 😌")
 
     async def cmd_skip(self, m: ChatMessage, arg: str) -> None:
-        t = await self.jb.skip()
+        t = await self.jb.skip(f"команда {m.text.split()[0]} від {m.login}")
         if t:
             await self.reply(m, f"⏭ скіпнуто {t.label}")
         else:

@@ -65,6 +65,9 @@ class Player:
         self._paused_total = 0.0
         self._paused_since: float | None = None
         self._stopped_by_us = False
+        # для журналу: скільки секунд протримався останній трек і що сказав mpv
+        self.last_played = 0.0
+        self.last_error = ""
 
     @property
     def available(self) -> bool:
@@ -77,7 +80,7 @@ class Player:
         now = self._paused_since or time.monotonic()
         return max(0.0, now - self._started - self._paused_total)
 
-    def _cmd(self, url: str, headers: dict) -> list[str]:
+    def _cmd(self, url: str, headers: dict, start: float = 0.0) -> list[str]:
         cmd = [
             self.mpv,
             "--no-video",
@@ -109,11 +112,13 @@ class Player:
                 cmd.append(f"--user-agent={v}")
             elif k.lower() not in ("accept-encoding",):
                 cmd.append(f"--http-header-fields-append={k}: {v}")
+        if start > 0:
+            cmd.append(f"--start=+{start:.1f}")
         cmd.append(url)
         return cmd
 
-    async def play(self, url: str, headers: dict | None = None) -> str:
-        """Грає трек до кінця. Повертає 'ended' | 'stopped' | 'error'."""
+    async def play(self, url: str, headers: dict | None = None, start: float = 0.0) -> str:
+        """Грає трек до кінця (з позиції start, секунд). Повертає 'ended' | 'stopped' | 'error'."""
         if not self.mpv:
             log.error("mpv не знайдено — встановіть його (див. README)")
             await asyncio.sleep(5)
@@ -125,9 +130,9 @@ class Player:
         self._stopped_by_us = False
         self.paused = False
         self._paused_total, self._paused_since = 0.0, None
-        self._started = time.monotonic()
+        self._started = time.monotonic() - max(0.0, start)
         self.proc = await asyncio.create_subprocess_exec(
-            *self._cmd(url, headers or {}),
+            *self._cmd(url, headers or {}, start),
             stdin=asyncio.subprocess.DEVNULL,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
@@ -136,11 +141,13 @@ class Player:
         _, err = await self.proc.communicate()
         rc = self.proc.returncode
         played = self.position
+        self.last_played = played
+        self.last_error = " ".join((err or b"").decode(errors="ignore").split())[-300:]
         self.proc = None
         self._started = 0.0
         if self._stopped_by_us:
             return "stopped"
-        if rc != 0 and played < 3:
+        if rc != 0 and played - start < 3:
             log.warning("mpv завершився з кодом %s: %s", rc, (err or b"").decode(errors="ignore")[-300:])
             return "error"
         return "ended"

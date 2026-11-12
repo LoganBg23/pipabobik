@@ -12,6 +12,8 @@ from typing import Awaitable, Callable
 from .music import MusicSource, Track, fmt_time
 from .player import Player
 
+RESUME_ATTEMPTS = 2  # скільки разів продовжувати трек, який YouTube обірвав посередині
+
 log = logging.getLogger("pipabobik.jukebox")
 
 Notify = Callable[[str], Awaitable[None]]
@@ -40,7 +42,8 @@ class Jukebox:
         self._fallback_loaded_at = 0.0
         self._wake = asyncio.Event()
         self._activated = asyncio.Event()
-        self._skip_flag = False
+        # який саме трек треба пропустити: так запізнілий «скіп» не зачепить наступний трек
+        self._skip_target: Track | None = None
         self.listeners: list[Callable[[], None]] = []
         self.say: Notify | None = None
         self.announce = False
@@ -151,7 +154,7 @@ class Jukebox:
         self.last_request[user_id] = time.time()
         # замовлення перебиває фонову музику
         if self.now and self.now.source == "fallback" and self.rules.get("interrupt_fallback", True):
-            asyncio.create_task(self.skip())
+            asyncio.create_task(self.skip("замовлення перебиває фонову музику", only=self.now))
         self._wake.set()
         self.save()
         self.changed()
@@ -227,9 +230,14 @@ class Jukebox:
         self._fallback_loaded_at = 0.0
 
     # ── керування ──
-    async def skip(self) -> Track | None:
+    async def skip(self, reason: str = "", only: Track | None = None) -> Track | None:
+        """Пропускає поточний трек. only — пропустити лише якщо зараз грає саме він."""
         cur = self.now
-        self._skip_flag = True
+        if only is not None and cur is not only:
+            return None  # поки чекали, заграв інший трек — його не чіпаємо
+        if cur:
+            log.info("⏭ Пропущено %s — %s", cur.label, reason or "без причини")
+        self._skip_target = cur
         await self.player.stop()
         return cur
 
@@ -239,7 +247,7 @@ class Jukebox:
             self.banned_ids.add(cur.video_id)
             self.banned_meta[cur.video_id] = cur.label
             self.save()
-            await self.skip()
+            await self.skip("трек заборонено", only=cur)
         return cur
 
     async def like(self, video_id: str, like: bool) -> None:
@@ -348,7 +356,7 @@ class Jukebox:
             if not self.active:
                 await self._activated.wait()
                 continue
-            self._skip_flag = False
+            self._skip_target = None
             if self.queue:
                 track = self.queue.pop(0)
                 self.save()
@@ -372,7 +380,7 @@ class Jukebox:
             res = await self.music.resolve_stream(track)
         finally:
             self.loading = False
-        if not self.active or self._skip_flag:
+        if not self.active or self._skip_target is track:
             if self.now is track:
                 self.now = None
                 self.changed()
@@ -390,10 +398,29 @@ class Jukebox:
             await self.say(f"🎶 Грає {track.label}{who}")
         log.info("▶ %s [%s]", track.label, track.source)
         url, headers = res
-        outcome = await self.player.play(url, headers)
+        start = 0.0
+        for attempt in range(1 + RESUME_ATTEMPTS):
+            outcome = await self.player.play(url, headers, start=start)
+            played = float(getattr(self.player, "last_played", 0.0) or 0.0)
+            if outcome == "stopped" or self._skip_target is track or not self.active:
+                break
+            # YouTube інколи обриває потік посеред треку: mpv завершується, ніби трек скінчився.
+            # Тоді беремо свіже посилання і продовжуємо з того самого місця.
+            cut = bool(track.duration) and 3 <= played < track.duration - 15
+            if not cut or attempt == RESUME_ATTEMPTS:
+                if cut:
+                    log.warning("%s обірвався на %s з %s і не відновився", track.label, fmt_time(int(played)), fmt_time(track.duration))
+                break
+            log.warning("%s обірвався на %s з %s (mpv: %s) — продовжую з того ж місця",
+                        track.label, fmt_time(int(played)), fmt_time(track.duration), getattr(self.player, "last_error", "") or "—")
+            res = await self.music.resolve_stream(track)
+            if not res or self._skip_target is track or not self.active:
+                break
+            url, headers = res
+            start = max(0.0, played - 2)
         if outcome == "error" and track.source == "request" and self.say:
             await self.say(f"@{track.requested_by} {track.label} не відтворився — пропускаю 😔")
-        if outcome != "stopped" or self._skip_flag:
+        if outcome != "stopped" or self._skip_target is track:
             self.history.append(track)
         if self.now is track:
             self.now = None

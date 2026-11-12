@@ -22,7 +22,7 @@ class FakePlayer:
         self.played: list[str] = []
         self._stop = asyncio.Event()
 
-    async def play(self, url, headers=None):
+    async def play(self, url, headers=None, start=0.0):
         self.played.append(url)
         self._stop.clear()
         try:
@@ -487,3 +487,119 @@ async def test_seek_command(cfg, tmp_path):
     assert "формат" in out[-1]
     await c.handle(msg("!перемотка 0:10"))
     assert "лише модератори" in out[-1] and jb.player.position == 198
+
+
+# ── пропуски й обриви ──
+class BlockingPlayer(FakePlayer):
+    """Як справжній mpv: play() триває, доки трек не дограє або його не зупинять."""
+
+    def __init__(self, cut_first_at=None):
+        super().__init__()
+        self.starts = []
+        self.last_played = 0.0
+        self.last_error = ""
+        self._ev = None
+        self.cut_first_at = cut_first_at
+
+    async def play(self, url, headers=None, start=0.0):
+        await self.stop()
+        self.starts.append((url, start))
+        if self.cut_first_at is not None and len(self.starts) == 1:
+            self.last_played = self.cut_first_at  # YouTube обірвав потік
+            return "ended"
+        self._ev = asyncio.Event()
+        try:
+            await asyncio.wait_for(self._ev.wait(), timeout=0.5)
+            res = "stopped"
+        except asyncio.TimeoutError:
+            res = "ended"
+        self._ev = None
+        self.last_played = 200.0
+        return res
+
+    async def stop(self):
+        if self._ev:
+            self._ev.set()
+            await asyncio.sleep(0.01)
+
+
+class SlowMusic(FakeMusic):
+    async def resolve_stream(self, t):
+        await asyncio.sleep(0.05)
+        return f"https://audio/{t.video_id}", {}
+
+
+async def _run_until(jb, cond, timeout=2.0):
+    end = asyncio.get_running_loop().time() + timeout
+    while not cond() and asyncio.get_running_loop().time() < end:
+        await asyncio.sleep(0.01)
+
+
+@pytest.mark.asyncio
+async def test_late_skip_does_not_drop_next_request(cfg, tmp_path):
+    p = BlockingPlayer()
+    music = SlowMusic(fallback=[T("fb1"), T("fb2")])
+    jb = Jukebox(dict(cfg["rules"], interrupt_fallback=True), dict(cfg["google"], fallback_playlist="LM", fallback_shuffle=False),
+                 music, p, tmp_path)
+    jb.activate()
+    task = asyncio.create_task(jb.run())
+    try:
+        await _run_until(jb, lambda: jb.now and jb.now.video_id == "fb1" and p._ev)
+        fb = jb.now
+        jb.add(T("r1"), "1", "a")  # перебиває фонову музику
+        await _run_until(jb, lambda: jb.now and jb.now.video_id == "r1")
+        # запізнілий скіп, адресований фоновому треку (напр. друге замовлення чи кнопка «Зараз»)
+        assert await jb.skip("запізнілий", only=fb) is None
+        await asyncio.sleep(0.15)
+        assert jb.now and jb.now.video_id == "r1" and p._ev  # замовлення грає далі
+        assert [u for u, _ in p.starts] == ["https://audio/fb1", "https://audio/r1"]
+    finally:
+        task.cancel()
+
+
+@pytest.mark.asyncio
+async def test_two_requests_at_once_during_fallback(cfg, tmp_path):
+    p = BlockingPlayer()
+    music = SlowMusic(fallback=[T("fb1")])
+    jb = Jukebox(dict(cfg["rules"], interrupt_fallback=True), dict(cfg["google"], fallback_playlist="LM", fallback_shuffle=False),
+                 music, p, tmp_path)
+    jb.activate()
+    task = asyncio.create_task(jb.run())
+    try:
+        await _run_until(jb, lambda: jb.now and jb.now.video_id == "fb1" and p._ev)
+        jb.add(T("r1"), "1", "a")
+        jb.add(T("r2"), "2", "b")  # два «скіпи» фонового треку одночасно
+        await _run_until(jb, lambda: jb.now and jb.now.video_id == "r1" and p._ev)
+        await asyncio.sleep(0.2)
+        assert jb.now.video_id == "r1" and [t.video_id for t in jb.queue] == ["r2"]
+    finally:
+        task.cancel()
+
+
+@pytest.mark.asyncio
+async def test_cut_stream_resumes_from_same_place(cfg, tmp_path):
+    p = BlockingPlayer(cut_first_at=40.0)
+    music = SlowMusic()
+    jb = Jukebox(cfg["rules"], dict(cfg["google"], fallback_playlist=""), music, p, tmp_path)
+    jb.activate()
+    jb.add(T("r1", dur=200), "1", "a")
+    task = asyncio.create_task(jb.run())
+    try:
+        await _run_until(jb, lambda: len(p.starts) == 2)
+        assert p.starts == [("https://audio/r1", 0.0), ("https://audio/r1", 38.0)]
+    finally:
+        task.cancel()
+
+
+@pytest.mark.asyncio
+async def test_skip_logs_who_did_it(cfg, tmp_path, caplog):
+    jb = Jukebox(cfg["rules"], cfg["google"], FakeMusic(), FakePlayer(), tmp_path)
+    jb.now = T("x", title="Обійми")
+    out = []
+
+    async def say(t, r=None):
+        out.append(t)
+
+    with caplog.at_level("INFO", logger="pipabobik.jukebox"):
+        await Commands(cfg, jb, FakeMusic(), say).handle(msg("!skip", login="moder", badges={"moderator"}))
+    assert "Пропущено «Обійми» — Artist — команда !skip від moder" in caplog.text

@@ -158,7 +158,7 @@ class Server:
         jb = self.bot.jukebox
         action = d.get("action")
         if action == "skip":
-            await jb.skip()
+            await jb.skip("кнопка в застосунку")
         elif action == "pause":
             await jb.set_pause(not jb.player.paused)
         elif action == "volume":
@@ -247,12 +247,13 @@ class Server:
             return web.json_response({"error": f"{track.label} — {reason}. Трек додано в бан-лист."}, status=409)
         mode = d.get("mode", "end")  # end | next | now
         who = self.bot.auth.login or self.bot.cfg.channel or "стрімер"
+        playing = jb.now
         jb.add(track, "panel", who, front=mode in ("next", "now"))
         if mode == "now":
             if not jb.active:
                 jb.activate()
-            elif jb.now:
-                await jb.skip()
+            elif playing:
+                await jb.skip("«Зараз» у застосунку", only=playing)
         return web.json_response(self.payload())
 
     # ── налаштування ──
