@@ -40,6 +40,10 @@ class FakePlayer:
     async def set_pause(self, p):
         self.paused = p
 
+    async def seek(self, pos):
+        self.position = pos
+        return True
+
 
 class FakeMusic:
     def __init__(self, results=None, fallback=None, fail_ids=()):
@@ -214,7 +218,7 @@ async def test_commands_flow(cfg, tmp_path):
     assert "напиши назву" in out[-1]
 
     await c.handle(msg("!скіп", login="viewer"))
-    assert "лише модератори" in out[-1]
+    assert "лише" in out[-1] and "модератори" in out[-1]
 
     jb.now = jb.queue.pop(0)
     await c.handle(msg("!шоце"))
@@ -269,11 +273,11 @@ async def test_helpers_can_only_skip_and_change_volume(cfg, tmp_path):
     await c.handle(msg("!гучність 20", login="Sonya_Tea", uid="7"))
     assert jb.player.volume == 20
     await c.handle(msg("!пауза", login="sonya_tea", uid="7"))
-    assert "лише модератори" in out[-1] and not jb.player.paused
+    assert "лише" in out[-1] and "модератори" in out[-1] and not jb.player.paused
     await c.handle(msg("!бантрек", login="sonya_tea", uid="7"))
-    assert "лише модератори" in out[-1]
+    assert "лише" in out[-1] and "модератори" in out[-1]
     await c.handle(msg("!музика", login="sonya_tea", uid="7"))
-    assert "тобі можна: !скіп, !гучність" in out[-1]
+    assert "!скіп — пропустити" in out[-1] and "!гучність" in out[-1] and "!бантрек" not in out[-1]
     await c.handle(msg("!скіп", login="sonya_tea", uid="7"))
     assert "скіпнуто" in out[-1]
 
@@ -363,3 +367,123 @@ def test_example_config_is_valid():
     assert cfg["twitch"]["helpers"] == []
     assert cfg["commands"]["now"][0] == "!шоце"
     assert cfg["commands"]["request"][0] == "!трек"
+
+
+# ── ролі, дозволи, ліміти ──
+from pipabobik.access import Access  # noqa: E402
+from pipabobik.commands import parse_seek  # noqa: E402
+
+
+def test_roles_and_most_generous_limits(cfg):
+    cfg.raw["twitch"]["helpers"] = ["helpy"]
+    cfg.raw["rules"].update(max_per_user=2, cooldown=30, max_duration=420)
+    cfg.raw["limits"]["subs"].update(custom=True, max_per_user=4, cooldown=10, max_duration=300)
+    cfg.raw["limits"]["vip"].update(custom=True, max_per_user=3, cooldown=60, max_duration=0)
+    a = Access(cfg)
+    viewer, sub = msg("x"), msg("x", badges={"subscriber"})
+    subvip = msg("x", badges={"subscriber", "vip"})
+    assert a.roles_of(viewer) == {"all"}
+    assert a.roles_of(msg("x", login="Helpy")) == {"all", "helpers"}
+    assert a.limits(viewer) == {"max_per_user": 2, "cooldown": 30, "max_duration": 420, "bypass_queue": False}
+    # у саба свої ліміти, але довжина треку береться щедріша — від «усіх»
+    assert a.limits(sub) == {"max_per_user": 4, "cooldown": 10, "max_duration": 420, "bypass_queue": False}
+    # саб + VIP: найщедріше з обох ролей (0 = без обмежень)
+    assert a.limits(subvip) == {"max_per_user": 4, "cooldown": 10, "max_duration": 0, "bypass_queue": False}
+    assert a.limits(msg("x", badges={"moderator"}))["bypass_queue"] is True
+    assert a.limits(msg("x", badges={"broadcaster"}))["max_per_user"] == 0
+    # роль без своїх лімітів = як у всіх
+    assert a.limits(msg("x", login="helpy")) == a.limits(viewer)
+
+
+@pytest.mark.asyncio
+async def test_permissions_per_role(cfg, tmp_path):
+    jb = Jukebox(cfg["rules"], cfg["google"], FakeMusic(results=[T("a")]), FakePlayer(), tmp_path)
+    jb.now = T("x")
+    out = []
+
+    async def say(t, r=None):
+        out.append(t)
+
+    c = Commands(cfg, jb, FakeMusic(results=[T("a")]), say)
+    cfg.raw["permissions"]["request"] = ["subs", "vip"]
+    cfg.raw["permissions"]["skip"] = ["vip"]
+    await c.handle(msg("!трек a"))
+    assert "не всім" in out[-1] and not jb.queue
+    await c.handle(msg("!трек a", uid="2", badges={"subscriber"}))
+    assert jb.queue
+    await c.handle(msg("!скіп", uid="3", badges={"moderator"}))
+    assert out[-1] == "це можуть лише VIP і стрімер 😌"
+    await c.handle(msg("!скіп", uid="4", badges={"vip"}))
+    assert "скіпнуто" in out[-1]
+    cfg.raw["permissions"]["skip"] = []  # нікому, крім стрімера
+    jb.now = T("y")
+    await c.handle(msg("!скіп", uid="4", badges={"vip"}))
+    assert out[-1] == "це можуть лише стрімер 😌"
+    await c.handle(msg("!скіп", uid="5", badges={"broadcaster"}))
+    assert "скіпнуто" in out[-1]
+
+
+@pytest.mark.asyncio
+async def test_role_limits_apply_to_requests(cfg, tmp_path):
+    music = FakeMusic(results=[T("long", dur=500)])
+    jb = Jukebox(cfg["rules"], cfg["google"], music, FakePlayer(), tmp_path)
+    out = []
+
+    async def say(t, r=None):
+        out.append(t)
+
+    c = Commands(cfg, jb, music, say)
+    cfg.raw["rules"]["max_duration"] = 420
+    await c.handle(msg("!трек long"))
+    assert "задовгий" in out[-1]
+    cfg.raw["limits"]["subs"].update(custom=True, max_duration=0)
+    await c.handle(msg("!трек long", uid="2", badges={"subscriber"}))
+    assert jb.queue and jb.queue[0].video_id == "long"
+
+    cfg.raw["rules"]["max_queue"] = 1
+    music.results = [T("b")]
+    await c.handle(msg("!трек b", uid="3", badges={"vip"}))
+    assert "переповнена" in out[-1]
+    await c.handle(msg("!трек b", uid="4", badges={"moderator"}))
+    assert len(jb.queue) == 2  # модераторам можна в переповнену чергу
+
+
+def test_old_who_can_request_becomes_permission(tmp_path):
+    p = tmp_path / "config.toml"
+    p.write_text('[rules]\nwho_can_request = "subs"\n', encoding="utf-8")
+    assert load_config(p)["permissions"]["request"] == ["subs", "vip", "mods"]
+    p.write_text('[rules]\nwho_can_request = "subs"\n\n[permissions]\nrequest = ["VIP", "nonsense"]\n', encoding="utf-8")
+    assert load_config(p)["permissions"]["request"] == ["vip"]  # нове налаштування важливіше за старе
+
+
+@pytest.mark.parametrize("arg,cur,expected", [
+    ("1:30", 10, 90), ("90", 10, 90), ("+30", 10, 40), ("-15", 40, 25), ("+1:00", 5, 65),
+    ("1:02:03", 0, 3723), ("0,5", 0, 0.5), ("", 0, None), ("abc", 0, None), ("1:-2", 0, None),
+])
+def test_parse_seek(arg, cur, expected):
+    assert parse_seek(arg, cur) == expected
+
+
+@pytest.mark.asyncio
+async def test_seek_command(cfg, tmp_path):
+    jb = Jukebox(cfg["rules"], cfg["google"], FakeMusic(), FakePlayer(), tmp_path)
+    out = []
+
+    async def say(t, r=None):
+        out.append(t)
+
+    c = Commands(cfg, jb, FakeMusic(), say)
+    mod = {"moderator"}
+    await c.handle(msg("!перемотка 1:00", badges=mod))
+    assert "нічого не грає" in out[-1]
+    jb.now = T("x", dur=200)
+    await c.handle(msg("!перемотка 1:30", badges=mod))
+    assert jb.player.position == 90 and "1:30 / 3:20" in out[-1]
+    await c.handle(msg("!мотай +30", badges=mod))
+    assert jb.player.position == 120
+    await c.handle(msg("!seek 9:00", badges=mod))
+    assert jb.player.position == 198  # не далі кінця треку
+    await c.handle(msg("!перемотка вперед", badges=mod))
+    assert "формат" in out[-1]
+    await c.handle(msg("!перемотка 0:10"))
+    assert "лише модератори" in out[-1] and jb.player.position == 198

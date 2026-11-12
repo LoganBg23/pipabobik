@@ -102,8 +102,11 @@ class Jukebox:
                 log.exception("listener")
 
     # ── правила ──
-    def check(self, track: Track, user_id: str = "", privileged: bool = False) -> str | None:
-        """Повертає причину відмови або None, якщо трек можна додати."""
+    def check(self, track: Track, user_id: str = "", privileged: bool = False, limits: dict | None = None) -> str | None:
+        """Повертає причину відмови або None, якщо трек можна додати.
+
+        limits — ліміти ролі глядача (див. access.py); без них діють загальні правила.
+        """
         r = self.rules
         if track.video_id in self.banned_ids:
             return f"{track.label} у бан-листі каналу 🚫"
@@ -113,23 +116,24 @@ class Jukebox:
                 return "цей трек заборонений на каналі 🚫"
         if r.get("block_explicit") and track.explicit:
             return f"{track.label} позначений як Explicit — на цьому каналі такі не граємо"
-        max_d = int(r.get("max_duration", 0) or 0)
+        max_d = int((limits if limits is not None else r).get("max_duration", 0) or 0)
         if max_d and track.duration > max_d and not privileged:
             return f"{track.label} задовгий ({fmt_time(track.duration)}), максимум {fmt_time(max_d)}"
         if (self.now and self.now.video_id == track.video_id) or any(t.video_id == track.video_id for t in self.queue):
             return f"{track.label} вже є в черзі 😉"
         return None
 
-    def check_user(self, user_id: str, privileged: bool) -> str | None:
+    def check_user(self, user_id: str, privileged: bool = False, limits: dict | None = None) -> str | None:
         if privileged:
             return None
         r = self.rules
-        if len(self.queue) >= int(r.get("max_queue", 30)):
+        lim = limits if limits is not None else r
+        if len(self.queue) >= int(r.get("max_queue", 30)) and not lim.get("bypass_queue"):
             return "черга переповнена, спробуй трохи згодом 🙏"
-        per_user = int(r.get("max_per_user", 0) or 0)
+        per_user = int(lim.get("max_per_user", 0) or 0)
         if per_user and sum(1 for t in self.queue if t.requested_by_id == user_id) >= per_user:
             return f"у тебе вже {per_user} трек(и) в черзі — дочекайся їх 🎧"
-        cd = int(r.get("cooldown", 0) or 0)
+        cd = int(lim.get("cooldown", 0) or 0)
         left = cd - (time.time() - self.last_request.get(user_id, 0))
         if cd and left > 0:
             return f"зачекай ще {int(left) + 1} с перед наступним замовленням ⏳"
@@ -255,6 +259,18 @@ class Jukebox:
     async def set_volume(self, vol: int) -> None:
         await self.player.set_volume(vol)
         self.changed()
+
+    async def seek(self, position: float) -> float | None:
+        """Перемотує поточний трек. Повертає нову позицію або None."""
+        if not self.now:
+            return None
+        pos = max(0.0, float(position))
+        if self.now.duration:
+            pos = min(pos, max(0.0, self.now.duration - 2))  # не в самий кінець, щоб трек не обірвався
+        if not await self.player.seek(pos):
+            return None
+        self.changed()
+        return pos
 
     def activate(self) -> None:
         if not self.active:

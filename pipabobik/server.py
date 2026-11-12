@@ -14,6 +14,14 @@ log = logging.getLogger("pipabobik.server")
 
 NICK_RE = re.compile(r"[a-z0-9_]{1,25}")  # логін Twitch
 
+
+def _num(v) -> int:
+    """Невід'ємне ціле з поля застосунку; сміття вважаємо нулем."""
+    try:
+        return max(0, int(float(v or 0)))
+    except (TypeError, ValueError):
+        return 0
+
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
 
@@ -34,6 +42,8 @@ class Server:
         r.add_post("/api/add", self.api_add)
         r.add_get("/api/settings", self.api_settings_get)
         r.add_post("/api/settings", self.api_settings_set)
+        r.add_get("/api/access", self.api_access_get)
+        r.add_post("/api/access", self.api_access_set)
         r.add_get("/api/state", self.api_state)
         r.add_get("/api/events", self.api_events)
         r.add_post("/api/control", self.api_control)
@@ -153,6 +163,15 @@ class Server:
             await jb.set_pause(not jb.player.paused)
         elif action == "volume":
             await jb.set_volume(int(d.get("value", jb.player.volume)))
+        elif action == "seek":
+            if not jb.now:
+                return web.json_response({"error": "Зараз нічого не грає"}, status=409)
+            try:
+                pos = float(d["position"]) if "position" in d else jb.player.position + float(d.get("delta", 0))
+            except (TypeError, ValueError):
+                return web.json_response({"error": "Невірна позиція"}, status=400)
+            if await jb.seek(pos) is None:
+                return web.json_response({"error": "Не вдалося перемотати"}, status=409)
         elif action == "remove":
             jb.remove_at(int(d.get("index", -1)))
         elif action == "up":
@@ -239,7 +258,7 @@ class Server:
     # ── налаштування ──
     SETTINGS_SCHEMA = {
         "rules": {
-            "who_can_request": str, "max_duration": int, "max_per_user": int, "cooldown": int,
+            "max_duration": int, "max_per_user": int, "cooldown": int,
             "max_queue": int, "only_songs": bool, "block_explicit": bool, "interrupt_fallback": bool,
             "banned_words": list, "block_russian": bool, "russian_artists": list,
         },
@@ -285,14 +304,123 @@ class Server:
                         v = str(v).strip()
                 except (TypeError, ValueError):
                     return web.json_response({"error": f"{sec}.{k}: невірне значення"}, status=400)
-                if k == "who_can_request" and v not in ("all", "subs", "vip", "mods"):
-                    continue
                 cfg[sec][k] = v  # застосовується одразу — ті самі словники використовують черга й команди
                 updates.setdefault(sec, {})[k] = v
         if updates:
             set_values(cfg.path, updates)
             self.bot.apply_settings(updates)
         return web.json_response({"ok": True})
+
+    # ── команди, ролі, ліміти ──
+    def _access_payload(self) -> dict:
+        from .access import COMMANDS, ROLES, Access
+
+        cfg = self.bot.cfg
+        acc = Access(cfg)
+        limits = {"all": acc.role_limits("all")}
+        for role, lim in cfg["limits"].items():
+            limits[role] = dict(lim)
+        return {
+            "roles": [{"key": k, "label": v} for k, v in ROLES],
+            "commands": [
+                {"key": k, "label": label, "desc": desc, "names": list(cfg["commands"].get(k, [])), "roles": acc.roles_for(k)}
+                for k, (label, desc, _) in COMMANDS.items()
+            ],
+            "limits": limits,
+            "helpers": list(cfg["twitch"].get("helpers") or []),
+            "max_queue": int(cfg["rules"].get("max_queue", 30)),
+        }
+
+    async def api_access_get(self, request: web.Request) -> web.Response:
+        if not self._authorized(request):
+            return web.json_response({"error": "bad key"}, status=403)
+        return web.json_response(self._access_payload())
+
+    async def api_access_set(self, request: web.Request) -> web.Response:
+        if not self._authorized(request):
+            return web.json_response({"error": "bad key"}, status=403)
+        from .access import COMMANDS, DEFAULT_LIMITS, LIMIT_KEYS, NAME_RE, normalize_name, normalize_roles
+        from .config import nick, set_values
+
+        d = await request.json()
+        cfg = self.bot.cfg
+        updates: dict[str, dict] = {}
+        err = lambda text: web.json_response({"error": text}, status=400)  # noqa: E731
+
+        # назви команд і хто може
+        cmds = d.get("commands") or {}
+        new_names = {k: list(v) for k, v in cfg["commands"].items()}
+        new_perms: dict[str, list[str]] = {}
+        for key, upd in cmds.items():
+            if key not in COMMANDS or not isinstance(upd, dict):
+                continue
+            label = COMMANDS[key][0]
+            if "names" in upd:
+                names = [n for n in dict.fromkeys(normalize_name(x) for x in upd["names"] or []) if n]
+                if not names:
+                    return err(f"«{label}»: потрібна хоча б одна назва")
+                bad = [n for n in names if not NAME_RE.fullmatch(n)]
+                if bad:
+                    return err(f"«{bad[0]}» не підходить: одне слово з ! на початку, до 25 символів, без пробілів")
+                new_names[key] = names
+            if "roles" in upd:
+                new_perms[key] = normalize_roles(upd["roles"])
+        owner: dict[str, str] = {}
+        for key, names in new_names.items():
+            for n in names:
+                if n in owner and owner[n] != key:
+                    a = COMMANDS.get(owner[n], (owner[n],))[0]
+                    return err(f"{n} уже зайнято командою «{a}»")
+                owner[n] = key
+
+        # ліміти ролей
+        lim_in = d.get("limits") or {}
+        rules_upd: dict = {}
+        role_upd: dict[str, dict] = {}
+        for role, vals in lim_in.items():
+            if not isinstance(vals, dict):
+                continue
+            if role == "all":
+                for k in ("max_per_user", "cooldown", "max_duration"):
+                    if k in vals:
+                        rules_upd[k] = _num(vals[k])
+            elif role in DEFAULT_LIMITS:
+                cur = dict(cfg["limits"][role])
+                for k in ("custom", *LIMIT_KEYS):
+                    if k in vals:
+                        cur[k] = bool(vals[k]) if k in ("custom", "bypass_queue") else _num(vals[k])
+                role_upd[role] = cur
+        if "max_queue" in d:
+            rules_upd["max_queue"] = max(1, _num(d["max_queue"]))
+
+        helpers = None
+        if "helpers" in d:
+            helpers = [n for n in dict.fromkeys(nick(x) for x in d["helpers"] or []) if NICK_RE.fullmatch(n)]
+
+        # усе перевірено — застосовуємо одразу і зберігаємо в config.toml
+        changed_names = {k: v for k, v in new_names.items() if v != cfg["commands"].get(k)}
+        if changed_names:
+            cfg["commands"].update(changed_names)
+            updates["commands"] = changed_names
+        if new_perms:
+            cfg["permissions"].update(new_perms)
+            updates["permissions"] = new_perms
+        if rules_upd:
+            cfg["rules"].update(rules_upd)
+            updates["rules"] = rules_upd
+        for role, cur in role_upd.items():
+            cfg["limits"][role] = cur
+            updates[f"limits.{role}"] = cur
+        if helpers is not None:
+            cfg["twitch"]["helpers"] = helpers
+            updates["twitch"] = {"helpers": helpers}
+        if updates:
+            set_values(cfg.path, updates)
+            commands = getattr(self.bot, "commands", None)  # з'являються, коли бот підключився до чату
+            if changed_names and commands:
+                commands.rebuild()
+            log.info("Доступ оновлено з панелі: %s", ", ".join(updates))
+        return web.json_response(self._access_payload())
 
     # ── авторизація Twitch ──
     async def auth_start(self, request: web.Request) -> web.Response:

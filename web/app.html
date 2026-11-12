@@ -82,8 +82,17 @@
   .t-artist { color: var(--blush); font-weight: 700; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .progress { display: grid; grid-template-columns: 38px 1fr 38px; gap: 8px; align-items: center; margin: 12px 0 14px; font-size: 12px; font-weight: 800; color: var(--muted); font-variant-numeric: tabular-nums; }
   .progress span:last-child { text-align: right; }
-  .bar { height: 6px; border-radius: 6px; background: var(--raised); overflow: hidden; }
-  .fill { height: 100%; width: 0; background: linear-gradient(90deg, var(--hot), var(--blush)); border-radius: inherit; transition: width 1s linear; }
+  .bar { position: relative; height: 6px; border-radius: 6px; background: var(--raised); transition: height .15s; }
+  .fill { position: relative; height: 100%; width: 0; background: linear-gradient(90deg, var(--hot), var(--blush)); border-radius: inherit; transition: width 1s linear; }
+  /* перемотка: ширша зона кліку, кружечок при наведенні */
+  #seekBar.can { cursor: pointer; touch-action: none; }
+  #seekBar.can::before { content: ""; position: absolute; inset: -9px 0; }
+  #seekBar.can:hover, #seekBar.dragging, #seekBar:focus-visible { height: 8px; }
+  #seekBar.can .fill::after { content: ""; position: absolute; right: -7px; top: 50%; width: 14px; height: 14px; margin-top: -7px; border-radius: 50%;
+    background: var(--pearl); box-shadow: 0 2px 8px rgba(0,0,0,.4); opacity: 0; transition: opacity .15s; }
+  #seekBar.can:hover .fill::after, #seekBar.dragging .fill::after, #seekBar:focus-visible .fill::after { opacity: 1; }
+  #seekBar.dragging .fill { transition: none; }
+  #seekBar:focus-visible { outline: 2px solid var(--blush); outline-offset: 4px; }
 
   .controls { display: flex; align-items: center; gap: 10px; }
   .round { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; background: var(--raised); transition: background .15s, transform .1s; }
@@ -120,7 +129,7 @@
 
   /* ── вкладки ── */
   .panel { background: var(--surface); border-radius: var(--r-lg); padding: 6px; }
-  .tabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; padding: 4px; background: var(--night); border-radius: 16px; }
+  .tabs { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; padding: 4px; background: var(--night); border-radius: 16px; }
   .tab { padding: 9px 4px; border-radius: 12px; font-weight: 800; color: var(--muted); transition: background .15s, color .15s; }
   .tab[aria-selected=true] { background: var(--raised); color: var(--pearl); }
   .tab .n { display: inline-block; min-width: 18px; padding: 0 5px; margin-left: 4px; border-radius: 999px; background: var(--hot); color: #fff; font-size: 11px; }
@@ -164,6 +173,31 @@
   .field.col { flex-direction: column; align-items: stretch; }
   .field textarea, .field input[type=text] { width: 100%; padding: 9px 11px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--surface); resize: vertical; }
   .group { font-size: 12px; font-weight: 800; color: var(--muted); margin: 10px 4px 2px; }
+  .note { color: var(--muted); font-size: 12px; margin: 2px 4px 8px; }
+  .seg.wide { display: grid; grid-template-columns: repeat(5, 1fr); }
+  .seg.wide button { padding: 7px 2px; }
+  .field.off { opacity: .45; }
+  .cmds { list-style: none; display: grid; gap: 6px; }
+  .cmd { padding: 11px 12px; border-radius: var(--r-md); background: var(--night); display: grid; gap: 8px; }
+  .cmd-head b { font-weight: 800; }
+  .cmd-head small { display: block; color: var(--muted); font-size: 12px; }
+  .names { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+  .name { display: inline-flex; align-items: center; border-radius: 999px; background: var(--raised); font-weight: 800; font-size: 13px; }
+  .name.main { background: var(--hot); color: #fff; }
+  .name .nm { padding: 3px 4px 3px 10px; border-radius: 999px 0 0 999px; }
+  .name .nm:hover { text-decoration: underline; text-underline-offset: 3px; }
+  .name .x { width: 22px; height: 22px; margin-right: 2px; border-radius: 50%; display: grid; place-items: center; opacity: .7; }
+  .name .x:hover { opacity: 1; background: rgba(0,0,0,.18); }
+  .name .x svg { width: 11px; height: 11px; fill: currentColor; }
+  .name-in { width: 120px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--hot); background: var(--surface); font-weight: 800; font-size: 13px; }
+  .addname { padding: 3px 10px; border-radius: 999px; border: 1px dashed var(--line); color: var(--muted); font-weight: 800; font-size: 12px; }
+  .addname:hover { color: var(--pearl); border-color: var(--muted); }
+  .roles { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+  .roles .lbl { font-size: 12px; color: var(--muted); margin-right: 2px; }
+  .role { padding: 4px 8px; border-radius: 8px; background: var(--surface); color: var(--muted); font-size: 12px; font-weight: 800; }
+  .role[aria-pressed=true] { background: rgba(255, 61, 154, .2); color: var(--blush); box-shadow: inset 0 0 0 1px rgba(255, 61, 154, .55); }
+  .role.implied { background: rgba(255, 61, 154, .13); color: #e7a3c6; box-shadow: inset 0 0 0 1px rgba(255, 61, 154, .2); cursor: default; }
+  .roles .only { font-size: 12px; color: var(--warn); }
   .addnick { display: flex; gap: 6px; margin-top: 8px; }
   .addnick input { flex: 1; min-width: 0; padding: 9px 11px; border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--surface); }
   .addnick input::placeholder { color: #8d6481; }
@@ -209,7 +243,7 @@
     <div class="who" id="who"></div>
     <div class="t-title" id="title" style="margin-top:8px">Нічого не грає</div>
     <div class="t-artist" id="artist">Замовлення з чату з'являться тут</div>
-    <div class="progress"><span id="cur">0:00</span><div class="bar"><div class="fill" id="fill"></div></div><span id="dur">0:00</span></div>
+    <div class="progress"><span id="cur">0:00</span><div class="bar" id="seekBar" role="slider" tabindex="0" aria-label="Перемотати" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0"><div class="fill" id="fill"></div></div><span id="dur">0:00</span></div>
     <div class="controls">
       <button class="round big" id="playBtn" aria-label="Пауза"><svg viewBox="0 0 24 24" id="playIcon"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg></button>
       <button class="round" data-act="skip" aria-label="Пропустити трек" title="Пропустити"><svg viewBox="0 0 24 24"><path d="M5 5l9 7-9 7zM16 5h3v14h-3z"/></svg></button>
@@ -228,6 +262,7 @@
     <div class="tabs" role="tablist">
       <button class="tab" role="tab" aria-selected="true" data-tab="queue">Черга<span class="n" id="qn"></span></button>
       <button class="tab" role="tab" aria-selected="false" data-tab="add">Додати</button>
+      <button class="tab" role="tab" aria-selected="false" data-tab="cmds">Команди</button>
       <button class="tab" role="tab" aria-selected="false" data-tab="rules">Правила</button>
       <button class="tab" role="tab" aria-selected="false" data-tab="history">Історія</button>
     </div>
@@ -245,31 +280,43 @@
       <ul class="list" id="results"><li class="empty"><b>Додайте трек без команд</b>Знайдіть пісню і поставте в чергу, наступною або одразу.</li></ul>
     </div>
 
+    <div class="view" id="v-cmds" hidden>
+      <p class="note">Ви як стрімер можете все. Ролі додаються: саб, який ще й VIP, має права обох.</p>
+
+      <div class="group">Команди чату</div>
+      <ul class="cmds" id="cmds"><li class="empty">Завантажую…</li></ul>
+
+      <div class="group">Ліміти замовлень</div>
+      <div class="form">
+        <div class="seg wide" id="limRole" role="radiogroup" aria-label="Роль"></div>
+        <div class="field" id="limCustomRow"><label for="limCustom">Свої ліміти<small id="limCustomHint">Вимкнено — діють ліміти для всіх глядачів</small></label>
+          <label class="switch"><input type="checkbox" id="limCustom"><span></span></label></div>
+        <div class="field lim"><label for="lim_max_duration">Найдовший трек<small>хвилин, 0 — без обмежень</small></label>
+          <div class="num"><input type="number" id="lim_max_duration" min="0" max="600" data-lim="max_duration" data-scale="60"></div></div>
+        <div class="field lim"><label for="lim_max_per_user">Треків від однієї людини<small>одночасно в черзі, 0 — без обмежень</small></label>
+          <div class="num"><input type="number" id="lim_max_per_user" min="0" max="50" data-lim="max_per_user"></div></div>
+        <div class="field lim"><label for="lim_cooldown">Пауза між замовленнями<small>секунд</small></label>
+          <div class="num"><input type="number" id="lim_cooldown" min="0" max="3600" data-lim="cooldown"></div></div>
+        <div class="field lim" id="limBypassRow"><label for="lim_bypass_queue">Можна в переповнену чергу</label>
+          <label class="switch"><input type="checkbox" id="lim_bypass_queue" data-lim="bypass_queue"><span></span></label></div>
+        <div class="field"><label for="max_queue">Розмір черги<small>для всіх разом</small></label>
+          <div class="num"><input type="number" id="max_queue" min="1" max="200"></div></div>
+      </div>
+
+      <div class="group">Помічники</div>
+      <div class="field col">
+        <label for="helperNick">Люди з роллю «Помічники»<small>Без модерки. Що їм можна — позначте в командах вище.</small></label>
+        <form class="addnick" id="helperForm">
+          <input type="text" id="helperNick" placeholder="Нік у Twitch" autocomplete="off" spellcheck="false" aria-label="Нік помічника">
+          <button type="submit">Додати</button>
+        </form>
+        <div class="nicks" id="helpers" aria-label="Помічники"></div>
+      </div>
+    </div>
+
     <div class="view" id="v-rules" hidden>
       <div class="form" id="rules">
-        <div class="group">Хто замовляє</div>
-        <div class="field"><span class="lbl">Замовлення доступні</span>
-          <div class="seg" id="who_can_request">
-            <button data-v="all">Усім</button><button data-v="subs">Сабам</button><button data-v="vip">VIP</button><button data-v="mods">Модерам</button>
-          </div></div>
-        <div class="field"><label for="max_duration">Найдовший трек<small>хвилин, модераторам можна довше</small></label>
-          <div class="num"><input type="number" id="max_duration" min="1" max="60" data-scale="60" data-key="rules.max_duration"></div></div>
-        <div class="field"><label for="max_per_user">Треків від однієї людини<small>одночасно в черзі</small></label>
-          <div class="num"><input type="number" id="max_per_user" min="0" max="20" data-key="rules.max_per_user"></div></div>
-        <div class="field"><label for="cooldown">Пауза між замовленнями<small>секунд</small></label>
-          <div class="num"><input type="number" id="cooldown" min="0" max="3600" data-key="rules.cooldown"></div></div>
-        <div class="field"><label for="max_queue">Розмір черги</label>
-          <div class="num"><input type="number" id="max_queue" min="1" max="200" data-key="rules.max_queue"></div></div>
-
-        <div class="group">Помічники</div>
-        <div class="field col">
-          <label for="helperNick">Хто ще може пропускати треки й міняти гучність<small id="helperHint">Командами в чаті. Модератори й ви вмієте це й так.</small></label>
-          <form class="addnick" id="helperForm">
-            <input type="text" id="helperNick" placeholder="Нік у Twitch" autocomplete="off" spellcheck="false" aria-label="Нік помічника">
-            <button type="submit">Додати</button>
-          </form>
-          <div class="nicks" id="helpers" aria-label="Помічники"></div>
-        </div>
+        <p class="note">Хто які команди може писати, ліміти замовлень і помічники — у вкладці «Команди».</p>
 
         <div class="group">Що грає</div>
         <div class="field"><label for="only_songs">Лише пісні з YouTube Music<small>без кліпів, «10 годин…» і відео з балачками</small></label>
@@ -417,12 +464,13 @@
 
   function apply(s) {
     state = s; receivedAt = performance.now();
+    $("seekBar").classList.toggle("can", canSeek());
     $("offline").classList.remove("show");
     renderChips(s.health || {}, s); renderNow(s); renderQueue(s); renderHistory(s); tick();
   }
 
   function tick() {
-    if (!state || document.hidden) return;
+    if (!state || document.hidden || seeking) return;
     const n = state.now;
     if (!n || state.status === "loading") { $("cur").textContent = "0:00"; $("fill").style.width = "0%"; return; }
     let el = n.elapsed || 0;
@@ -430,8 +478,57 @@
     if (n.duration) el = Math.min(el, n.duration);
     $("cur").textContent = fmt(el);
     $("fill").style.width = n.duration ? `${(el / n.duration) * 100}%` : "0%";
+    const bar = $("seekBar");
+    bar.setAttribute("aria-valuemax", Math.round(n.duration || 0));
+    bar.setAttribute("aria-valuenow", Math.round(el));
+    bar.setAttribute("aria-valuetext", `${fmt(el)} з ${fmt(n.duration)}`);
   }
   setInterval(tick, 1000);
+
+  // ── перемотка ──
+  let seeking = false, seekTo = 0;
+  const canSeek = () => !!(state && state.now && state.now.duration && state.status !== "loading");
+  function elapsedNow() {
+    const n = state.now;
+    return Math.min(n.duration, (n.elapsed || 0) + (state.status === "playing" ? (performance.now() - receivedAt) / 1000 : 0));
+  }
+  function showSeek(sec) {
+    seekTo = Math.max(0, Math.min(state.now.duration, sec));
+    $("cur").textContent = fmt(seekTo);
+    $("fill").style.width = `${(seekTo / state.now.duration) * 100}%`;
+  }
+  async function doSeek(sec) {
+    try {
+      await control("seek", { position: sec });
+      state.now.elapsed = sec; receivedAt = performance.now();  // одразу, не чекаючи наступного оновлення
+    } catch {}
+    tick();
+  }
+  const seekBar = $("seekBar");
+  const fromPointer = (e) => { const r = seekBar.getBoundingClientRect(); return ((e.clientX - r.left) / r.width) * state.now.duration; };
+  seekBar.addEventListener("pointerdown", (e) => {
+    if (!canSeek()) return;
+    seeking = true; seekBar.classList.add("dragging"); seekBar.setPointerCapture(e.pointerId);
+    showSeek(fromPointer(e));
+  });
+  seekBar.addEventListener("pointermove", (e) => { if (seeking) showSeek(fromPointer(e)); });
+  const endSeek = (commit) => {
+    if (!seeking) return;
+    seeking = false; seekBar.classList.remove("dragging");
+    if (commit) doSeek(seekTo); else tick();
+  };
+  seekBar.addEventListener("pointerup", () => endSeek(true));
+  seekBar.addEventListener("pointercancel", () => endSeek(false));
+  seekBar.addEventListener("keydown", (e) => {
+    if (!canSeek()) return;
+    const step = { ArrowRight: 10, ArrowLeft: -10, PageUp: 30, PageDown: -30 }[e.key];
+    let to = null;
+    if (step) to = elapsedNow() + step;
+    if (e.key === "Home") to = 0;
+    if (to === null) return;
+    e.preventDefault();
+    doSeek(Math.max(0, Math.min(state.now.duration - 2, to)));
+  });
 
   let offlineTimer = null;
   const connect = () => {
@@ -500,6 +597,7 @@
     document.querySelectorAll(".tab").forEach((x) => x.setAttribute("aria-selected", x === t));
     document.querySelectorAll(".view").forEach((v) => v.hidden = v.id !== "v-" + t.dataset.tab);
     if (t.dataset.tab === "rules") loadSettings();
+    if (t.dataset.tab === "cmds") loadAccess();
     if (t.dataset.tab === "add") $("q").focus();
   });
 
@@ -532,45 +630,7 @@
       else if (Array.isArray(v)) el.value = v.join(", ");
       else el.value = el.dataset.scale ? Math.round(v / +el.dataset.scale) : (v ?? "");
     });
-    document.querySelectorAll("#who_can_request button").forEach((b) => b.setAttribute("aria-pressed", b.dataset.v === s.rules.who_can_request));
-    helpers = (s.twitch && s.twitch.helpers) || [];
-    const cmd = s.commands || {};
-    $("helperHint").textContent = `Командами ${cmd.skip || "!скіп"} і ${cmd.volume || "!гучність"} у чаті. Модератори й ви вмієте це й так.`;
-    renderHelpers();
   }
-
-  // ── помічники ──
-  let helpers = [];
-  const xIcon = '<svg viewBox="0 0 24 24"><path d="M6.4 5L5 6.4 10.6 12 5 17.6 6.4 19l5.6-5.6 5.6 5.6 1.4-1.4-5.6-5.6L19 6.4 17.6 5 12 10.6z"/></svg>';
-  function renderHelpers() {
-    $("helpers").innerHTML = helpers.map((n) =>
-      `<span class="nick">@${esc(n)}<button type="button" data-unhelper="${esc(n)}" title="Прибрати" aria-label="Прибрати @${esc(n)}">${xIcon}</button></span>`).join("");
-  }
-  async function saveHelpers(msg) {
-    await api("/api/settings", { twitch: { helpers } });
-    toast(msg);
-  }
-  $("helperForm").onsubmit = async (e) => {
-    e.preventDefault();
-    // приймаємо «@нік», «Нік» і посилання twitch.tv/нік
-    const raw = $("helperNick").value.trim().replace(/^.*twitch\.tv\//i, "").replace(/^@/, "").split(/[/?#\s]/)[0].toLowerCase();
-    if (!raw) return;
-    if (!/^[a-z0-9_]{1,25}$/.test(raw)) return toast("Нік Twitch: лише латиниця, цифри й _");
-    if (helpers.includes(raw)) return toast(`@${raw} уже в списку`);
-    helpers = [...helpers, raw];
-    renderHelpers();
-    $("helperNick").value = "";
-    try { await saveHelpers(`@${raw} тепер може скіпати й міняти гучність`); }
-    catch { helpers = helpers.filter((n) => n !== raw); renderHelpers(); }
-  };
-  $("helpers").addEventListener("click", async (e) => {
-    const b = e.target.closest("[data-unhelper]");
-    if (!b) return;
-    const n = b.dataset.unhelper, before = helpers;
-    helpers = helpers.filter((x) => x !== n);
-    renderHelpers();
-    try { await saveHelpers(`@${n} більше не помічник`); } catch { helpers = before; renderHelpers(); }
-  });
   function queueSave(sec, k, v) {
     (pending[sec] ||= {})[k] = v;
     clearTimeout(saveTimer);
@@ -584,9 +644,139 @@
       queueSave(sec, k, v);
     });
   });
-  document.querySelectorAll("#who_can_request button").forEach((b) => b.onclick = () => {
-    document.querySelectorAll("#who_can_request button").forEach((x) => x.setAttribute("aria-pressed", x === b));
-    queueSave("rules", "who_can_request", b.dataset.v);
+
+  // ── команди, ролі, ліміти ──
+  const xIcon = '<svg viewBox="0 0 24 24"><path d="M6.4 5L5 6.4 10.6 12 5 17.6 6.4 19l5.6-5.6 5.6 5.6 1.4-1.4-5.6-5.6L19 6.4 17.6 5 12 10.6z"/></svg>';
+  let acc = null, limRole = "all";
+  async function loadAccess() {
+    try { acc = await api("/api/access", null, "GET"); } catch { return; }
+    renderAccess();
+  }
+  async function saveAccess(body, msg) {
+    try { acc = await api("/api/access", body); if (msg) toast(msg); }
+    catch { /* помилку вже показано; повертаємо, як було на сервері */ }
+    renderAccess();
+  }
+  const shortRole = (r) => (r.key === "mods" ? "Модери" : r.label);
+  const roleLabel = (k) => (acc.roles.find((r) => r.key === k) || {}).label || k;
+
+  function renderAccess() {
+    if (!acc) return;
+    $("cmds").innerHTML = acc.commands.map((c) => {
+      const all = c.roles.includes("all");
+      const names = c.names.map((n, i) => `<span class="name ${i === 0 ? "main" : ""}" title="${i === 0 ? "Основна — її бот показує в підказках" : ""}">
+          <button type="button" class="nm" data-edit="${c.key}" data-i="${i}" aria-label="Змінити ${esc(n)}">${esc(n)}</button>
+          <button type="button" class="x" data-delname="${c.key}" data-i="${i}" aria-label="Прибрати ${esc(n)}" ${c.names.length < 2 ? "hidden" : ""}>${xIcon}</button></span>`).join("");
+      const roles = acc.roles.map((r) => {
+        const implied = all && r.key !== "all";
+        return `<button type="button" class="role ${implied ? "implied" : ""}" data-role="${r.key}" data-cmd="${c.key}"
+          aria-pressed="${all || c.roles.includes(r.key)}" ${implied ? 'aria-disabled="true" title="Уже входять в «Усі»"' : ""}>${esc(shortRole(r))}</button>`;
+      }).join("");
+      return `<li class="cmd" data-key="${c.key}">
+        <div class="cmd-head"><b>${esc(c.label)}</b><small>${esc(c.desc)}</small></div>
+        <div class="names">${names}<button type="button" class="addname" data-addname="${c.key}">+ назва</button></div>
+        <div class="roles"><span class="lbl">Можуть:</span>${roles}${c.roles.length ? "" : '<span class="only">лише ви</span>'}</div>
+      </li>`;
+    }).join("");
+
+    $("limRole").innerHTML = acc.roles.map((r) =>
+      `<button type="button" role="radio" data-lim-role="${r.key}" aria-pressed="${r.key === limRole}" aria-checked="${r.key === limRole}">${esc(shortRole(r))}</button>`).join("");
+    const lim = acc.limits[limRole], base = acc.limits.all;
+    const custom = limRole === "all" || !!lim.custom;
+    $("limCustomRow").hidden = limRole === "all";
+    $("limBypassRow").hidden = limRole === "all";
+    $("limCustom").checked = custom;
+    $("limCustomHint").textContent = custom ? `${roleLabel(limRole)} мають свої ліміти` : "Вимкнено — діють ліміти для всіх глядачів";
+    const shown = custom ? lim : base;
+    document.querySelectorAll("[data-lim]").forEach((el) => {
+      const v = shown[el.dataset.lim];
+      if (el.type === "checkbox") el.checked = !!v;
+      else el.value = el.dataset.scale ? Math.round((v || 0) / +el.dataset.scale) : (v ?? 0);
+      el.disabled = !custom;
+      el.closest(".field").classList.toggle("off", !custom);
+    });
+    $("max_queue").value = acc.max_queue;
+    renderHelpers();
+  }
+
+  // назви: правка прямо в чипі
+  function editName(key, i) {
+    const c = acc.commands.find((x) => x.key === key);
+    const holder = i === null ? document.querySelector(`[data-addname="${key}"]`) : document.querySelector(`[data-edit="${key}"][data-i="${i}"]`).parentElement;
+    const input = document.createElement("input");
+    input.className = "name-in"; input.value = i === null ? "!" : c.names[i];
+    input.setAttribute("aria-label", "Назва команди"); input.spellcheck = false;
+    holder.replaceWith(input); input.focus(); input.setSelectionRange(input.value.length, input.value.length);
+    let done = false;
+    const finish = (commit) => {
+      if (done) return; done = true;
+      let v = input.value.trim().toLowerCase().replace(/\s+/g, "");
+      if (v && !v.startsWith("!")) v = "!" + v;
+      const names = [...c.names];
+      if (!commit || v === "!" || (i !== null && v === names[i])) return renderAccess();
+      if (i === null) { if (v) names.push(v); }
+      else if (v) names[i] = v; else names.splice(i, 1);
+      if (!names.length) { toast("Потрібна хоча б одна назва"); return renderAccess(); }
+      saveAccess({ commands: { [key]: { names } } }, i === null ? `Додано ${v}` : v ? `Тепер ${v}` : "Назву прибрано");
+    };
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") { e.preventDefault(); finish(true); }
+      if (e.key === "Escape") finish(false);
+    });
+    input.addEventListener("blur", () => finish(true));
+  }
+
+  $("cmds").addEventListener("click", (e) => {
+    const ed = e.target.closest("[data-edit]");
+    if (ed) return editName(ed.dataset.edit, +ed.dataset.i);
+    const add = e.target.closest("[data-addname]");
+    if (add) return editName(add.dataset.addname, null);
+    const del = e.target.closest("[data-delname]");
+    if (del) {
+      const c = acc.commands.find((x) => x.key === del.dataset.delname);
+      const names = c.names.filter((_, i) => i !== +del.dataset.i);
+      return saveAccess({ commands: { [c.key]: { names } } }, `${c.names[+del.dataset.i]} прибрано`);
+    }
+    const rb = e.target.closest("[data-role]");
+    if (rb && !rb.classList.contains("implied")) {
+      const c = acc.commands.find((x) => x.key === rb.dataset.cmd);
+      const r = rb.dataset.role;
+      const roles = c.roles.includes(r) ? c.roles.filter((x) => x !== r) : (r === "all" ? ["all"] : [...c.roles, r]);
+      saveAccess({ commands: { [c.key]: { roles } } }, "Збережено");
+    }
+  });
+
+  // ліміти
+  $("limRole").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-lim-role]");
+    if (b) { limRole = b.dataset.limRole; renderAccess(); }
+  });
+  $("limCustom").onchange = (e) => saveAccess({ limits: { [limRole]: { custom: e.target.checked } } }, "Збережено");
+  document.querySelectorAll("[data-lim]").forEach((el) => el.addEventListener("change", () => {
+    let v = el.type === "checkbox" ? el.checked : Math.max(0, +el.value || 0) * (+el.dataset.scale || 1);
+    saveAccess({ limits: { [limRole]: { [el.dataset.lim]: v } } }, "Збережено");
+  }));
+  $("max_queue").onchange = (e) => saveAccess({ max_queue: Math.max(1, +e.target.value || 1) }, "Збережено");
+
+  // помічники
+  function renderHelpers() {
+    $("helpers").innerHTML = (acc ? acc.helpers : []).map((n) =>
+      `<span class="nick">@${esc(n)}<button type="button" data-unhelper="${esc(n)}" title="Прибрати" aria-label="Прибрати @${esc(n)}">${xIcon}</button></span>`).join("");
+  }
+  $("helperForm").onsubmit = (e) => {
+    e.preventDefault();
+    if (!acc) return;
+    // приймаємо «@нік», «Нік» і посилання twitch.tv/нік
+    const raw = $("helperNick").value.trim().replace(/^.*twitch\.tv\//i, "").replace(/^@/, "").split(/[/?#\s]/)[0].toLowerCase();
+    if (!raw) return;
+    if (!/^[a-z0-9_]{1,25}$/.test(raw)) return toast("Нік Twitch: лише латиниця, цифри й _");
+    if (acc.helpers.includes(raw)) return toast(`@${raw} уже в списку`);
+    $("helperNick").value = "";
+    saveAccess({ helpers: [...acc.helpers, raw] }, `@${raw} тепер помічник`);
+  };
+  $("helpers").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-unhelper]");
+    if (b) saveAccess({ helpers: acc.helpers.filter((x) => x !== b.dataset.unhelper) }, `@${b.dataset.unhelper} більше не помічник`);
   });
 
   // ── низ ──

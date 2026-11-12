@@ -43,11 +43,11 @@ audio_device = ""
 show_window = true
 
 [rules]
-# Хто може замовляти: "all" | "subs" | "vip" | "mods"
-who_can_request = "all"
+# Ліміти для всіх глядачів (0 = без обмежень). Для сабів, VIP, помічників
+# і модераторів — свої в секціях [limits.*] нижче або в застосунку («Команди»)
 # Максимальна тривалість треку, секунд
 max_duration = 420
-# Скільки треків одна людина може мати в черзі одночасно (модератори без ліміту)
+# Скільки треків одна людина може мати в черзі одночасно
 max_per_user = 2
 # Пауза між замовленнями однієї людини, секунд
 cooldown = 30
@@ -74,10 +74,58 @@ skip    = ["!скіп", "!скип", "!skip", "!next"]
 queue   = ["!черга", "!queue"]
 wrong   = ["!нетой", "!wrongsong"]
 volume  = ["!гучність", "!vol"]
+seek    = ["!перемотка", "!мотай", "!seek"]
 pause   = ["!пауза", "!pause"]
 play    = ["!грай", "!play"]
 ban     = ["!бантрек"]
 help    = ["!музика", "!pipabobik"]
+
+[permissions]
+# Хто може користуватися командою: "all" (усі), "subs", "vip", "helpers", "mods".
+# Ролі додаються: саб-VIP отримує все, що дозволено і сабам, і VIP. Стрімер може все.
+# Зручніше міняти в застосунку: вкладка «Команди»
+request = ["all"]
+now     = ["all"]
+queue   = ["all"]
+wrong   = ["all"]
+help    = ["all"]
+skip    = ["helpers", "mods"]
+volume  = ["helpers", "mods"]
+seek    = ["mods"]
+pause   = ["mods"]
+play    = ["mods"]
+ban     = ["mods"]
+
+# Ліміти замовлень для окремих ролей. custom = false — як у всіх глядачів.
+# Якщо в людини кілька ролей, діють найщедріші ліміти.
+[limits.subs]
+custom = false
+max_per_user = 3
+cooldown = 15
+max_duration = 600
+bypass_queue = false
+
+[limits.vip]
+custom = false
+max_per_user = 3
+cooldown = 15
+max_duration = 600
+bypass_queue = false
+
+[limits.helpers]
+custom = false
+max_per_user = 3
+cooldown = 15
+max_duration = 600
+bypass_queue = false
+
+[limits.mods]
+# 0 = без обмежень; bypass_queue — можна замовляти навіть у переповнену чергу
+custom = true
+max_per_user = 0
+cooldown = 0
+max_duration = 0
+bypass_queue = true
 
 [chat]
 # Писати в чат, коли починає грати новий трек

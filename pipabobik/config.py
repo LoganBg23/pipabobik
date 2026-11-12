@@ -6,6 +6,8 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .access import default_permissions, normalize_limits, normalize_roles
+
 if sys.version_info >= (3, 11):
     import tomllib
 else:  # pragma: no cover
@@ -27,7 +29,6 @@ DEFAULTS: dict = {
     },
     "player": {"mpv_path": "mpv", "volume": 60, "normalize": True, "audio_device": "", "show_window": True},
     "rules": {
-        "who_can_request": "all",
         "max_duration": 420,
         "max_per_user": 2,
         "cooldown": 30,
@@ -46,11 +47,14 @@ DEFAULTS: dict = {
         "queue": ["!черга", "!queue"],
         "wrong": ["!нетой", "!wrongsong"],
         "volume": ["!гучність", "!vol"],
+        "seek": ["!перемотка", "!мотай", "!seek"],
         "pause": ["!пауза", "!pause"],
         "play": ["!грай", "!play"],
         "ban": ["!бантрек"],
         "help": ["!музика", "!pipabobik"],
     },
+    "permissions": default_permissions(),
+    "limits": normalize_limits(None),
     "chat": {"announce_tracks": False, "greet_on_stream_start": True},
     "server": {"port": 17777},
 }
@@ -119,6 +123,13 @@ def load_config(path: Path = CONFIG_PATH) -> Config:
         with open(path, "rb") as f:
             data = tomllib.load(f)
     cfg = Config(raw=_merge(DEFAULTS, data), path=path)
+    # хто що може: [permissions] і [limits.<роль>]; без них — типові (з урахуванням старого who_can_request)
+    perms = default_permissions(cfg.raw["rules"])
+    for k, v in (data.get("permissions") or {}).items():
+        if k in perms:
+            perms[k] = normalize_roles(v)
+    cfg.raw["permissions"] = perms
+    cfg.raw["limits"] = normalize_limits(data.get("limits"))
     # нормалізуємо команди: завжди список, нижній регістр
     for k, v in cfg.raw["commands"].items():
         if isinstance(v, str):

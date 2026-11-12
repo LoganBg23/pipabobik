@@ -70,13 +70,13 @@ async def test_panel_api_add_settings(tmp_path, monkeypatch):
         st = await (await client.post("/api/add", json={"track": t2, "mode": "next"}, headers=H)).json()
         assert [t["title"] for t in st["queue"]] == ["Друга", "Обійми"]
 
-        r = await client.post("/api/settings", json={"rules": {"cooldown": 45, "who_can_request": "subs", "banned_words": "a, B"},
+        r = await client.post("/api/settings", json={"rules": {"cooldown": 45, "banned_words": "a, B"},
                                                      "chat": {"announce_tracks": True}}, headers=H)
         assert r.status == 200
         assert bot.cfg["rules"]["cooldown"] == 45 and bot.jukebox.rules["cooldown"] == 45  # застосовано одразу
         assert bot.jukebox.announce is True
         again = load_config(cfg_path)  # і збережено у файл
-        assert again["rules"]["who_can_request"] == "subs" and again["rules"]["banned_words"] == ["a", "b"]
+        assert again["rules"]["banned_words"] == ["a", "b"]
 
         r = await client.post("/api/settings", json={"twitch": {"helpers": ["@Sonya_Tea", "sonya_tea", "кирилиця", " mod2 "],
                                                                 "client_secret": "hack"}}, headers=H)
@@ -90,5 +90,102 @@ async def test_panel_api_add_settings(tmp_path, monkeypatch):
         st = await (await client.post("/api/control", json={"action": "clear"}, headers=H)).json()
         assert st["queue"] == []
         assert (await client.post("/api/settings", json={}, headers={})).status == 403
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_access_api(tmp_path, monkeypatch):
+    import shutil
+    from pathlib import Path
+
+    from pipabobik.twitch import ChatMessage
+
+    monkeypatch.setattr("pipabobik.app.DATA_DIR", tmp_path)
+    cfg_path = tmp_path / "config.toml"
+    shutil.copy(Path(__file__).resolve().parent.parent / "config.example.toml", cfg_path)
+    bot = Bot(load_config(cfg_path))
+    bot.jukebox.data_dir = tmp_path
+    bot.server.key = "k"
+    H = {"X-Pipabobik-Key": "k"}
+
+    async def say(text, reply_to=None):
+        pass
+
+    from pipabobik.commands import Commands
+
+    bot.commands = Commands(bot.cfg, bot.jukebox, bot.music, say)
+    client = TestClient(TestServer(bot.server.app))
+    await client.start_server()
+    try:
+        a = await (await client.get("/api/access", headers=H)).json()
+        keys = [c["key"] for c in a["commands"]]
+        assert keys[0] == "request" and "seek" in keys
+        assert a["limits"]["all"]["max_per_user"] == 2 and a["limits"]["mods"]["bypass_queue"] is True
+
+        # перейменування, нова назва, ролі
+        r = await client.post("/api/access", json={"commands": {
+            "skip": {"names": ["Далі", "!skip"], "roles": ["vip", "helpers", "зайве"]},
+            "request": {"roles": ["subs", "all"]},
+        }}, headers=H)
+        a = await r.json()
+        skip = next(c for c in a["commands"] if c["key"] == "skip")
+        assert skip["names"] == ["!далі", "!skip"] and skip["roles"] == ["vip", "helpers"]
+        assert next(c for c in a["commands"] if c["key"] == "request")["roles"] == ["all"]
+        assert "!далі" in bot.commands.table and "!скіп" not in bot.commands.table  # діє одразу
+
+        # конфлікти і погані назви не зберігаються
+        r = await client.post("/api/access", json={"commands": {"volume": {"names": ["!далі"]}}}, headers=H)
+        assert r.status == 400 and "«Пропустити»" in (await r.json())["error"]
+        assert (await client.post("/api/access", json={"commands": {"volume": {"names": ["!дві слова"]}}}, headers=H)).status == 400
+        assert (await client.post("/api/access", json={"commands": {"volume": {"names": []}}}, headers=H)).status == 400
+        assert bot.cfg["commands"]["volume"][0] == "!гучність"
+
+        # ліміти ролей і помічники
+        r = await client.post("/api/access", json={
+            "limits": {"all": {"cooldown": 60}, "subs": {"custom": True, "max_per_user": 5, "max_duration": "abc"}},
+            "max_queue": 50, "helpers": ["@Pipa_Fan", "погано"],
+        }, headers=H)
+        a = await r.json()
+        assert a["limits"]["all"]["cooldown"] == 60 and a["limits"]["subs"]["max_per_user"] == 5
+        assert a["limits"]["subs"]["max_duration"] == 0 and a["max_queue"] == 50 and a["helpers"] == ["pipa_fan"]
+        fan = ChatMessage("m", "1", "pipa_fan", "Pipa_Fan", "!далі")
+        assert bot.commands.can(fan, "skip")
+
+        # усе збережено в config.toml
+        again = load_config(cfg_path)
+        assert again["commands"]["skip"] == ["!далі", "!skip"] and again["permissions"]["skip"] == ["vip", "helpers"]
+        assert again["limits"]["subs"]["custom"] is True and again["limits"]["subs"]["max_per_user"] == 5
+        assert again["rules"]["cooldown"] == 60 and again["rules"]["max_queue"] == 50
+        assert again["twitch"]["helpers"] == ["pipa_fan"]
+        assert (await client.get("/api/access")).status == 403
+    finally:
+        await client.close()
+
+
+@pytest.mark.asyncio
+async def test_control_seek(tmp_path, monkeypatch):
+    from pipabobik.music import Track
+
+    monkeypatch.setattr("pipabobik.app.DATA_DIR", tmp_path)
+    bot = Bot(load_config(tmp_path / "none.toml"))
+    bot.server.key = "k"
+    H = {"X-Pipabobik-Key": "k"}
+    seeks = []
+
+    async def fake_seek(pos):
+        seeks.append(pos)
+        return True
+
+    bot.player.seek = fake_seek
+    client = TestClient(TestServer(bot.server.app))
+    await client.start_server()
+    try:
+        assert (await client.post("/api/control", json={"action": "seek", "position": 30}, headers=H)).status == 409
+        bot.jukebox.now = Track("abcdefghijk", "Обійми", "Океан Ельзи", duration=236)
+        assert (await client.post("/api/control", json={"action": "seek", "position": 90}, headers=H)).status == 200
+        await client.post("/api/control", json={"action": "seek", "position": 999}, headers=H)
+        assert seeks == [90, 234]
+        assert (await client.post("/api/control", json={"action": "seek", "position": "x"}, headers=H)).status == 400
     finally:
         await client.close()

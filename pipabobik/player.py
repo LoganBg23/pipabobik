@@ -180,6 +180,18 @@ class Player:
         if self.proc:
             await asyncio.to_thread(self._send_ipc, "set_property", "volume", self.volume)
 
+    async def seek(self, position: float) -> bool:
+        """Перемотує на позицію в секундах від початку треку."""
+        if not self.proc:
+            return False
+        position = max(0.0, float(position))
+        if not await asyncio.to_thread(self._send_ipc, "seek", position, "absolute"):
+            return False
+        # підлаштовуємо власний облік позиції під нову точку
+        now = self._paused_since or time.monotonic()
+        self._started = now - position - self._paused_total
+        return True
+
     async def set_pause(self, paused: bool) -> None:
         if not self.proc or paused == self.paused:
             return

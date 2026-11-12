@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 from typing import Awaitable, Callable
 
+from .access import Access
 from .jukebox import Jukebox
 from .music import MusicSource, Track, extract_video_id, fmt_time
 from .twitch import ChatMessage
@@ -11,6 +12,27 @@ from .twitch import ChatMessage
 log = logging.getLogger("pipabobik.commands")
 
 Say = Callable[[str, str | None], Awaitable[None]]
+
+
+def parse_seek(arg: str, current: float) -> float | None:
+    """«1:30», «90» — абсолютна позиція; «+30», «-1:00» — зсув від поточної."""
+    a = arg.strip().replace(",", ".").replace(" ", "")
+    if not a:
+        return None
+    sign = 0
+    if a[0] in "+-":
+        sign = 1 if a[0] == "+" else -1
+        a = a[1:]
+    try:
+        parts = [float(x) for x in a.split(":")]
+    except ValueError:
+        return None
+    if not parts or len(parts) > 3 or any(x < 0 for x in parts):
+        return None
+    sec = 0.0
+    for x in parts:
+        sec = sec * 60 + x
+    return current + sign * sec if sign else sec
 
 
 def minutes(sec: int) -> str:
@@ -25,46 +47,40 @@ class Commands:
         self.jb = jukebox
         self.music = music
         self.say = say
-        self.table: dict[str, Callable[[ChatMessage, str], Awaitable[None]]] = {}
-        handlers = {
+        self.access = Access(cfg)
+        self.handlers: dict[str, Callable[[ChatMessage, str], Awaitable[None]]] = {
             "request": self.cmd_request,
             "now": self.cmd_now,
             "skip": self.cmd_skip,
             "queue": self.cmd_queue,
             "wrong": self.cmd_wrong,
             "volume": self.cmd_volume,
+            "seek": self.cmd_seek,
             "pause": self.cmd_pause,
             "play": self.cmd_play,
             "ban": self.cmd_ban,
             "help": self.cmd_help,
         }
-        for key, fn in handlers.items():
-            for alias in cfg["commands"].get(key, []):
-                self.table[alias] = fn
+        self.table: dict[str, tuple[str, Callable[[ChatMessage, str], Awaitable[None]]]] = {}
+        self.rebuild()
+
+    def rebuild(self) -> None:
+        """Перечитує назви команд (після змін у застосунку)."""
+        self.table = {}
+        for key, fn in self.handlers.items():
+            for alias in self.cfg["commands"].get(key, []):
+                self.table.setdefault(alias, (key, fn))
 
     def first(self, key: str) -> str:
         names = self.cfg["commands"].get(key) or [f"!{key}"]
         return names[0]
 
     def privileged(self, m: ChatMessage) -> bool:
-        return m.is_mod or m.login.lower() in self.cfg["twitch"]["admins"]
+        """Модератор, стрімерка або адмін з config.toml."""
+        return m.is_broadcaster or "mods" in self.access.roles_of(m)
 
-    def helper(self, m: ChatMessage) -> bool:
-        """Помічник зі списку в застосунку: лише скіп і гучність."""
-        return m.login.lower() in (self.cfg["twitch"].get("helpers") or [])
-
-    def can_control(self, m: ChatMessage) -> bool:
-        return self.privileged(m) or self.helper(m)
-
-    def can_request(self, m: ChatMessage) -> bool:
-        who = self.cfg["rules"].get("who_can_request", "all")
-        if who == "all" or self.privileged(m):
-            return True
-        if who == "vip":
-            return m.is_vip
-        if who == "subs":
-            return m.is_sub or m.is_vip
-        return False  # mods
+    def can(self, m: ChatMessage, key: str) -> bool:
+        return self.access.can(m, key)
 
     async def reply(self, m: ChatMessage, text: str) -> None:
         await self.say(text, m.message_id)
@@ -75,19 +91,21 @@ class Commands:
         parts = m.text.split(maxsplit=1)
         name = parts[0].lower()
         arg = parts[1].strip() if len(parts) > 1 else ""
-        fn = self.table.get(name)
-        if fn:
-            log.info("%s: %s", m.login, m.text)
-            await fn(m, arg)
+        entry = self.table.get(name)
+        if not entry:
+            return
+        key, fn = entry
+        log.info("%s: %s", m.login, m.text)
+        if not self.can(m, key):
+            return await self._deny(m, key)
+        await fn(m, arg)
 
     # ── для всіх ──
     async def cmd_request(self, m: ChatMessage, arg: str) -> None:
-        if not self.can_request(m):
-            return await self.reply(m, "замовлення зараз доступні не всім глядачам 🙈")
         if not arg:
             return await self.reply(m, f"напиши назву: {self.first('request')} виконавець — пісня 🎵")
-        priv = self.privileged(m)
-        reason = self.jb.check_user(m.user_id, priv)
+        lim = self.access.limits(m)
+        reason = self.jb.check_user(m.user_id, limits=lim)
         if reason:
             return await self.reply(m, reason)
 
@@ -105,7 +123,7 @@ class Commands:
         chosen: Track | None = None
         first_reason = None
         for t in candidates[:5]:
-            r = self.jb.check(t, m.user_id, priv)
+            r = self.jb.check(t, m.user_id, limits=lim)
             if r is None:
                 ru = await self.jb.filter_reason(t)
                 if ru:
@@ -119,7 +137,7 @@ class Commands:
             return await self.reply(m, first_reason or "цей трек не можна додати")
 
         # повторна перевірка: поки шукали, ліміти могли змінитися
-        reason = self.jb.check_user(m.user_id, priv)
+        reason = self.jb.check_user(m.user_id, limits=lim)
         if reason:
             return await self.reply(m, reason)
         pos = self.jb.add(chosen, m.user_id, m.display_name)
@@ -159,26 +177,31 @@ class Commands:
 
     async def cmd_help(self, m: ChatMessage, arg: str) -> None:
         c = self.first
-        text = (
-            f"🎵 pipabobik: {c('request')} назва — замовити · {c('now')} — що грає · "
-            f"{c('queue')} — черга · {c('wrong')} — прибрати свій трек"
-        )
-        if self.privileged(m):
-            text += f" · модерам: {c('skip')}, {c('pause')}, {c('play')}, {c('volume')} 0-100, {c('ban')}"
-        elif self.helper(m):
-            text += f" · тобі можна: {c('skip')}, {c('volume')} 0-100"
-        await self.reply(m, text)
+        hints = {
+            "request": f"{c('request')} назва — замовити",
+            "now": f"{c('now')} — що грає",
+            "queue": f"{c('queue')} — черга",
+            "wrong": f"{c('wrong')} — прибрати свій трек",
+            "skip": f"{c('skip')} — пропустити",
+            "volume": f"{c('volume')} 0-100",
+            "seek": f"{c('seek')} 1:30 або +30",
+            "pause": f"{c('pause')}",
+            "play": f"{c('play')}",
+            "ban": f"{c('ban')} — заборонити трек",
+        }
+        parts = [h for k, h in hints.items() if self.cfg["commands"].get(k) and self.can(m, k)]
+        await self.reply(m, "🎵 pipabobik: " + (" · ".join(parts) if parts else "тобі зараз доступна лише ця підказка"))
 
-    # ── модератори та стрімер (скіп і гучність — ще й помічники) ──
-    async def _deny(self, m: ChatMessage) -> None:
-        await self.reply(m, "це можуть лише модератори та стрімер 😌")
-
-    async def _deny_control(self, m: ChatMessage) -> None:
-        await self.reply(m, "це можуть лише модератори, стрімер і помічники 😌")
+    # ── керування (хто саме може — налаштовується у вкладці «Команди») ──
+    async def _deny(self, m: ChatMessage, key: str) -> None:
+        allowed = self.access.roles_for(key)
+        if key == "request":
+            return await self.reply(m, "замовлення зараз доступні не всім глядачам 🙈")
+        names = {"subs": "саби", "vip": "VIP", "helpers": "помічники", "mods": "модератори"}
+        who = ", ".join(names[r] for r in allowed if r in names)
+        await self.reply(m, f"це можуть лише {who + ' і ' if who else ''}стрімер 😌")
 
     async def cmd_skip(self, m: ChatMessage, arg: str) -> None:
-        if not self.can_control(m):
-            return await self._deny_control(m)
         t = await self.jb.skip()
         if t:
             await self.reply(m, f"⏭ скіпнуто {t.label}")
@@ -186,8 +209,6 @@ class Commands:
             await self.reply(m, "зараз нічого не грає")
 
     async def cmd_volume(self, m: ChatMessage, arg: str) -> None:
-        if not self.can_control(m):
-            return await self._deny_control(m)
         if not arg:
             return await self.reply(m, f"🔊 гучність: {self.jb.player.volume}")
         try:
@@ -197,17 +218,25 @@ class Commands:
         await self.jb.set_volume(v)
         await self.reply(m, f"🔊 гучність: {self.jb.player.volume}")
 
+    async def cmd_seek(self, m: ChatMessage, arg: str) -> None:
+        t = self.jb.now
+        if not t:
+            return await self.reply(m, "зараз нічого не грає")
+        target = parse_seek(arg, self.jb.player.position)
+        if target is None:
+            return await self.reply(m, f"формат: {self.first('seek')} 1:30 (на позицію) або +30 / -15 (секунд)")
+        pos = await self.jb.seek(target)
+        if pos is None:
+            return await self.reply(m, "не вдалося перемотати 😕")
+        await self.reply(m, f"⏩ {t.label}: {fmt_time(int(pos))}" + (f" / {fmt_time(t.duration)}" if t.duration else ""))
+
     async def cmd_pause(self, m: ChatMessage, arg: str) -> None:
-        if not self.privileged(m):
-            return await self._deny(m)
         if not self.jb.now:
             return await self.reply(m, "зараз нічого не грає")
         await self.jb.set_pause(not self.jb.player.paused)
         await self.reply(m, "⏸ пауза" if self.jb.player.paused else "▶ граємо далі")
 
     async def cmd_play(self, m: ChatMessage, arg: str) -> None:
-        if not self.privileged(m):
-            return await self._deny(m)
         if not self.jb.active:
             self.jb.activate()
             return await self.reply(m, "▶ музику ввімкнено")
@@ -216,8 +245,6 @@ class Commands:
         await self.reply(m, "▶ граємо")
 
     async def cmd_ban(self, m: ChatMessage, arg: str) -> None:
-        if not self.privileged(m):
-            return await self._deny(m)
         t = await self.jb.ban_current()
         if t:
             await self.reply(m, f"🚫 {t.label} більше не гратиме на каналі")
